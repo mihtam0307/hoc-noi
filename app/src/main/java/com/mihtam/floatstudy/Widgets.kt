@@ -353,3 +353,64 @@ class MaxWidthFrame(c: Context, private val maxPx: Int) : FrameLayout(c) {
         super.onMeasure(nw, h)
     }
 }
+
+/** Biểu tượng "thanh nhạc nhảy" phủ lên hình nổi khi đang phát âm thanh / đang đọc. */
+class EqView(c: Context) : View(c) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private var t = 0f
+    private var anim: ValueAnimator? = null
+    private val ks = intArrayOf(1, 2, 3, 2, 1)
+    private val ph = floatArrayOf(0f, 0.3f, 0.6f, 0.15f, 0.75f)
+
+    fun setActive(on: Boolean) {
+        if (on) {
+            if (visibility != VISIBLE) visibility = VISIBLE
+            if (anim == null) {
+                anim = ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = 1100
+                    repeatCount = ValueAnimator.INFINITE
+                    interpolator = android.view.animation.LinearInterpolator()
+                    addUpdateListener {
+                        t = it.animatedValue as Float
+                        invalidate()
+                    }
+                    start()
+                }
+            }
+        } else {
+            anim?.cancel()
+            anim = null
+            if (visibility != GONE) visibility = GONE
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        anim?.cancel()
+        anim = null
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(cv: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        p.style = Paint.Style.FILL
+        p.color = 0x73000000
+        cv.drawRect(0f, 0f, w, h, p)
+        val n = ks.size
+        val bw = w * 0.085f
+        val gap = w * 0.055f
+        val total = n * bw + (n - 1) * gap
+        var x = (w - total) / 2f
+        val minH = h * 0.12f
+        val maxH = h * 0.42f
+        p.color = 0xFFFFFFFF.toInt()
+        for (i in 0 until n) {
+            val s = 0.5f + 0.5f * Math.sin(2.0 * Math.PI * (ks[i] * t + ph[i])).toFloat()
+            val bh = minH + (maxH - minH) * s
+            rect.set(x, h / 2f - bh / 2f, x + bw, h / 2f + bh / 2f)
+            cv.drawRoundRect(rect, bw / 2f, bw / 2f, p)
+            x += bw + gap
+        }
+    }
+}

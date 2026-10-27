@@ -23,5 +23,5 @@ App mở lên sẽ hỏi GitHub bản mới nhất, thấy số lớn hơn thì 
 ## 3. Giao diện mới (v2)
 - Mặc định màu **trắng**; mọi icon đều tự vẽ (`Widgets.kt`), không dùng icon/emoji của hệ thống.
 - App nổi có 2 tab: **Đọc** (đọc tự động, lặp, công thức) và **YouTube** (WebView m.youtube.com, ô tìm kiếm + gợi ý thời gian thực).
-- Thu nhỏ khung: tiếng đọc / video vẫn chạy; hiện **thanh mini** cạnh hình nổi (tên, thời gian thực, nút phát/dừng).
+- Thu nhỏ khung: tiếng đọc / video vẫn chạy; hình nổi hiện **thanh nhạc chuyển động** khi đang phát. Chạm hình nổi để mở menu nhỏ (phát/tạm dừng, dừng đọc, Đọc tự động, YouTube, Cài đặt, Tắt app nổi).
 - Khung phủ kín màn hình, cách rìa 10dp, tự theo hướng xoay (cửa sổ MATCH_PARENT + đệm theo vùng an toàn); WebView được giữ nguyên khi xoay nên video không bị ngắt.

@@ -8,12 +8,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.RippleDrawable
+import android.os.SystemClock
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -74,22 +77,15 @@ class FloatingService : Service() {
     private val ui = Handler(Looper.getMainLooper())
 
     // Cửa sổ nổi
-    private var bubble: ImageView? = null
+    private var bubble: FrameLayout? = null
+    private var bubbleImg: ImageView? = null
+    private var eq: EqView? = null
+    private var menu: LinearLayout? = null
+    private var menuClosedAt = 0L
     private var bubbleLp: WindowManager.LayoutParams? = null
     private var panel: FrameLayout? = null
     private var host: FrameLayout? = null          // cửa sổ 1px giữ WebView sống khi khung bị thu nhỏ
 
-    // Thanh mini (hiện khi thu nhỏ mà vẫn đang đọc / đang phát video)
-    private var mini: LinearLayout? = null
-    private var miniLp: WindowManager.LayoutParams? = null
-    private var miniYtRow: LinearLayout? = null
-    private var miniRdRow: LinearLayout? = null
-    private var miniPlay: IconBtn? = null
-    private var miniTitle: TextView? = null
-    private var miniTime: TextView? = null
-    private var miniRd: TextView? = null
-    private var miniBar: ProgressLine? = null
-    private var miniShown = false
 
     // Trạng thái khung đọc (giữ lại khi dựng lại giao diện)
     private var inputText = ""
@@ -146,7 +142,6 @@ class FloatingService : Service() {
                 lines = parse(inputText)
             }
             if (panel == null && k == "repeat") repeatIdx = Prefs.int(this, "repeat", 0).coerceIn(0, 5)
-            if (k.startsWith("f_")) dropMini()
             if (panel != null && (k.startsWith("f_") || k == "text_size" || k == "speed")) buildPanel()
         }
     }
@@ -163,8 +158,8 @@ class FloatingService : Service() {
         tab = Prefs.int(this, "last_tab", 0).coerceIn(0, 1)
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         speaker = Speaker(this)
-        speaker.onLine = { i, p -> curLine = i; pass = p; refreshStatus(); highlight(); refreshMini() }
-        speaker.onEnd = { curLine = -1; refreshStatus(); highlight(); refreshMini() }
+        speaker.onLine = { i, p -> curLine = i; pass = p; refreshStatus(); highlight(); refreshActivity() }
+        speaker.onEnd = { curLine = -1; refreshStatus(); highlight(); refreshActivity() }
 
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CH, "App nổi", NotificationManager.IMPORTANCE_LOW))
@@ -190,8 +185,9 @@ class FloatingService : Service() {
     override fun onConfigurationChanged(cfg: Configuration) {
         super.onConfigurationChanged(cfg)
         ui.postDelayed({
+            dismissMenu()
             clampBubble()
-            if (panel != null) buildPanel() else positionMini()
+            if (panel != null) buildPanel()
         }, 150)
     }
 
@@ -209,7 +205,7 @@ class FloatingService : Service() {
         yt = null
         panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         host?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        mini?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        menu?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         bubble?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         super.onDestroy()
     }
@@ -243,15 +239,23 @@ class FloatingService : Service() {
     // ---------------------------------------------------------------- Hình nổi
 
     private fun showBubble() {
-        val iv = ImageView(this)
-        iv.scaleType = ImageView.ScaleType.CENTER_CROP
-        iv.clipToOutline = true
-        iv.outlineProvider = object : ViewOutlineProvider() {
+        val size = Ui.dp(this, Prefs.int(this, "bubble_size", 64))
+        val root = FrameLayout(this)
+        root.clipToOutline = true
+        root.outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(v: View, o: Outline) {
                 o.setOval(0, 0, v.width, v.height)
             }
         }
-        val size = Ui.dp(this, Prefs.int(this, "bubble_size", 64))
+        val img = ImageView(this)
+        img.scaleType = ImageView.ScaleType.CENTER_CROP
+        root.addView(img, FrameLayout.LayoutParams(-1, -1))
+        val eqv = EqView(this)
+        eqv.visibility = View.GONE
+        root.addView(eqv, FrameLayout.LayoutParams(-1, -1))
+        bubbleImg = img
+        eq = eqv
+
         val lp = WindowManager.LayoutParams(
             size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
@@ -259,7 +263,7 @@ class FloatingService : Service() {
         lp.gravity = Gravity.TOP or Gravity.START
         lp.x = Ui.dp(this, 8)
         lp.y = Ui.dp(this, 220)
-        bubble = iv
+        bubble = root
         bubbleLp = lp
 
         var downX = 0f
@@ -267,49 +271,49 @@ class FloatingService : Service() {
         var startX = 0
         var startY = 0
         var moved = false
-        iv.setOnTouchListener { v, e ->
-            when (e.action) {
+        root.setOnTouchListener { v, ev ->
+            when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX; downY = e.rawY
+                    downX = ev.rawX; downY = ev.rawY
                     startX = lp.x; startY = lp.y
                     moved = false
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (e.rawX - downX).toInt()
-                    val dy = (e.rawY - downY).toInt()
+                    val dx = (ev.rawX - downX).toInt()
+                    val dy = (ev.rawY - downY).toInt()
                     if (abs(dx) > Ui.dp(this, 6) || abs(dy) > Ui.dp(this, 6)) moved = true
                     if (moved) {
+                        dismissMenu()
                         val (sw, sh) = screen()
                         lp.x = (startX + dx).coerceIn(0, maxOf(0, sw - lp.width))
                         lp.y = (startY + dy).coerceIn(0, maxOf(0, sh - lp.height))
                         try { wm.updateViewLayout(v, lp) } catch (_: Exception) {}
-                        positionMini()
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved) showPanel()
+                    if (!moved) toggleMenu()
                     true
                 }
                 else -> false
             }
         }
-        wm.addView(iv, lp)
+        wm.addView(root, lp)
         applyBubble()
     }
 
     private fun applyBubble() {
-        val iv = bubble ?: return
+        val root = bubble ?: return
+        val img = bubbleImg ?: return
         val lp = bubbleLp ?: return
         val size = Ui.dp(this, Prefs.int(this, "bubble_size", 64))
         lp.width = size
         lp.height = size
-        iv.alpha = Prefs.int(this, "bubble_alpha", 90) / 100f
+        root.alpha = Prefs.int(this, "bubble_alpha", 90) / 100f
         val bmp = Img.load(Prefs.str(this, "bubble_img"), 512)
-        if (bmp != null) iv.setImageBitmap(bmp) else iv.setImageResource(R.drawable.ic_launcher)
-        try { wm.updateViewLayout(iv, lp) } catch (_: Exception) {}
-        positionMini()
+        if (bmp != null) img.setImageBitmap(bmp) else img.setImageResource(R.drawable.ic_launcher)
+        try { wm.updateViewLayout(root, lp) } catch (_: Exception) {}
     }
 
     private fun clampBubble() {
@@ -321,150 +325,136 @@ class FloatingService : Service() {
         try { wm.updateViewLayout(iv, lp) } catch (_: Exception) {}
     }
 
-    // ---------------------------------------------------------------- Thanh mini
-
-    private fun dropMini() {
-        mini?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        mini = null
-        miniLp = null
-        miniShown = false
-        refreshMini()
-    }
-
-    private fun ensureMini(): LinearLayout {
-        mini?.let { return it }
-        val look = Look(this, "f")
-        val p = Ui.dp(this, 10)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(p, p, p, p)
-            background = Ui.rr(look.glassAt(maxOf(look.glass, 92)), 20, look.hair)
-            elevation = Ui.dp(this@FloatingService, 6).toFloat()
-            setOnClickListener { openFromMini() }
-        }
-
-        val ytRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val play = Ui.iconBtn(this, look, Ic.PAUSE, 40, true) { ytToggle() }
-        ytRow.addView(play)
-        val tc = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val title = Ui.tv(this, look, "YouTube", 13.5f, true)
-        title.maxLines = 1
-        title.ellipsize = TextUtils.TruncateAt.END
-        val time = Ui.tv(this, look, "", 12f, false, true)
-        tc.addView(title)
-        tc.addView(time)
-        ytRow.addView(tc, LinearLayout.LayoutParams(0, -2, 1f).apply {
-            marginStart = Ui.dp(this@FloatingService, 10)
-            marginEnd = Ui.dp(this@FloatingService, 8)
-        })
-        ytRow.addView(Ui.iconBtn(this, look, Ic.EXPAND, 34) { openFromMini() })
-        val bar = ProgressLine(this, look.withAlpha(look.text, 16), look.accent)
-
-        val rdRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        rdRow.addView(Ui.iconBtn(this, look, Ic.STOP, 40, true) { speaker.stop() })
-        val rd = Ui.tv(this, look, "", 13f, true)
-        rd.maxLines = 2
-        rd.ellipsize = TextUtils.TruncateAt.END
-        rdRow.addView(rd, LinearLayout.LayoutParams(0, -2, 1f).apply {
-            marginStart = Ui.dp(this@FloatingService, 10)
-        })
-
-        root.addView(ytRow, LinearLayout.LayoutParams(-1, -2))
-        root.addView(bar, LinearLayout.LayoutParams(-1, -2).apply { topMargin = Ui.dp(this@FloatingService, 8) })
-        root.addView(rdRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = Ui.dp(this@FloatingService, 8) })
-
-        val (sw, _) = screen()
-        val w = minOf(Ui.dp(this, 290), (sw * 0.8f).toInt())
-        val lp = WindowManager.LayoutParams(
-            w, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or hardware(), PixelFormat.TRANSLUCENT
-        )
-        lp.gravity = Gravity.TOP or Gravity.START
-        miniYtRow = ytRow
-        miniRdRow = rdRow
-        miniPlay = play
-        miniTitle = title
-        miniTime = time
-        miniRd = rd
-        miniBar = bar
-        mini = root
-        miniLp = lp
-        wm.addView(root, lp)
-        positionMini()
-        return root
-    }
-
-    private fun positionMini() {
-        val m = mini ?: return
-        val lp = miniLp ?: return
-        val b = bubbleLp ?: return
-        val (sw, sh) = screen()
-        val gap = Ui.dp(this, 8)
-        var x = b.x + b.width + gap
-        if (x + lp.width > sw - gap) x = b.x - lp.width - gap
-        lp.x = x.coerceIn(gap, maxOf(gap, sw - lp.width - gap))
-        lp.y = b.y.coerceIn(gap, maxOf(gap, sh - Ui.dp(this, 140)))
-        try { wm.updateViewLayout(m, lp) } catch (_: Exception) {}
-    }
-
-    private fun openFromMini() {
-        if (ytHas && !(speaker.speaking && !ytPlaying)) tab = 1 else tab = 0
-        Prefs.putI(this, "last_tab", tab)
-        showPanel()
-    }
+    // ---------------------------------------------------------------- Hiệu ứng thanh nhạc + menu nhỏ
 
     private fun readStatusText(): String {
         val tot = if (speaker.total == -1) "∞" else speaker.total.toString()
         return "Đang đọc dòng ${curLine + 1}/${lines.size} · lần $pass/$tot"
     }
 
-    private fun fmtTime(s: Double): String {
-        val t = s.toInt().coerceAtLeast(0)
-        val h = t / 3600
-        val m = (t % 3600) / 60
-        val x = t % 60
-        return if (h > 0) "%d:%02d:%02d".format(h, m, x) else "%d:%02d".format(m, x)
+    /** Hình nổi hiện các thanh nhạc chuyển động khi đang phát video hoặc đang đọc. */
+    private fun refreshActivity() {
+        val active = panel == null && ((ytHas && ytPlaying) || speaker.speaking)
+        eq?.setActive(active)
     }
 
-    private fun refreshMini() {
-        val reading = speaker.speaking && curLine >= 0
-        val show = panel == null && (ytHas || reading)
-        if (!show) {
-            mini?.visibility = View.GONE
-            miniShown = false
-            return
+    private class MenuItem(val ic: Ic, val label: String, val danger: Boolean, val act: () -> Unit)
+
+    private fun dismissMenu() {
+        menu?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        if (menu != null) menuClosedAt = SystemClock.uptimeMillis()
+        menu = null
+    }
+
+    private fun toggleMenu() {
+        if (menu != null) {
+            dismissMenu()
+        } else if (SystemClock.uptimeMillis() - menuClosedAt > 350) {
+            showMenu()
         }
-        val m = ensureMini()
-        miniYtRow?.visibility = if (ytHas) View.VISIBLE else View.GONE
-        miniBar?.visibility = if (ytHas) View.VISIBLE else View.GONE
-        miniRdRow?.visibility = if (reading) View.VISIBLE else View.GONE
+    }
+
+    private fun openPanel(t: Int, settings: Boolean) {
+        tab = t
+        Prefs.putI(this, "last_tab", t)
+        settingsOpen = settings
+        settingsY = 0
+        showPanel()
+    }
+
+    private fun showMenu() {
+        val b = bubbleLp ?: return
+        dismissMenu()
+        val look = Look(this, "f")
+        val items = ArrayList<MenuItem>()
         if (ytHas) {
-            miniTitle?.text = ytTitle.ifBlank { "YouTube" }
-            miniTime?.text = fmtTime(ytTime) + " / " + fmtTime(ytDur)
-            miniBar?.set(if (ytDur > 0) (ytTime / ytDur).toFloat() else 0f)
-            miniPlay?.iv?.set(if (ytPlaying) Ic.PAUSE else Ic.PLAY)
+            items.add(MenuItem(if (ytPlaying) Ic.PAUSE else Ic.PLAY,
+                if (ytPlaying) "Tạm dừng video" else "Phát video", false) { ytToggle() })
         }
-        if (reading) miniRd?.text = readStatusText()
-        if (!miniShown) {
-            m.visibility = View.VISIBLE
-            miniShown = true
-            positionMini()
+        if (speaker.speaking) items.add(MenuItem(Ic.STOP, "Dừng đọc", false) { speaker.stop() })
+        items.add(MenuItem(Ic.WAVE, "Đọc tự động", false) { openPanel(0, false) })
+        items.add(MenuItem(Ic.VIDEO, "YouTube", false) { openPanel(1, false) })
+        items.add(MenuItem(Ic.SLIDERS, "Cài đặt", false) { openPanel(tab, true) })
+        items.add(MenuItem(Ic.CLOSE, "Tắt app nổi", true) { stopSelf() })
+
+        val pad = Ui.dp(this, 6)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+            background = Ui.rr(look.glassAt(maxOf(look.glass, 94)), 20, look.hair)
+            elevation = Ui.dp(this@FloatingService, 8).toFloat()
         }
+        val red = 0xFFD93025.toInt()
+        items.forEach { it0 ->
+            val col = if (it0.danger) red else look.text
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Ui.dp(this@FloatingService, 12), Ui.dp(this@FloatingService, 13),
+                    Ui.dp(this@FloatingService, 14), Ui.dp(this@FloatingService, 13))
+                background = RippleDrawable(
+                    ColorStateList.valueOf(look.withAlpha(look.text, 14)), null, Ui.rr(Color.WHITE, 14)
+                )
+                isClickable = true
+                setOnClickListener {
+                    dismissMenu()
+                    it0.act()
+                }
+            }
+            val ic = Ui.icon(this, it0.ic, if (it0.danger) red else look.accent, 20)
+            (ic.layoutParams as LinearLayout.LayoutParams).marginEnd = Ui.dp(this, 14)
+            row.addView(ic)
+            val t = Ui.tv(this, look, it0.label, 15f, true)
+            t.setTextColor(col)
+            row.addView(t)
+            root.addView(row, lp(-1, -2))
+        }
+
+        val w = Ui.dp(this, 232)
+        root.measure(
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val h = root.measuredHeight
+        val (sw, sh) = screen()
+        val gap = Ui.dp(this, 8)
+        val right = b.x + b.width + gap + w <= sw - gap
+        var x = if (right) b.x + b.width + gap else b.x - w - gap
+        x = x.coerceIn(gap, maxOf(gap, sw - w - gap))
+        val y = minOf(b.y, sh - h - gap).coerceAtLeast(gap)
+
+        val lpm = WindowManager.LayoutParams(
+            w, WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or hardware(),
+            PixelFormat.TRANSLUCENT
+        )
+        lpm.gravity = Gravity.TOP or Gravity.START
+        lpm.x = x
+        lpm.y = y
+        root.setOnTouchListener { _, ev ->
+            if (ev.action == MotionEvent.ACTION_OUTSIDE) {
+                dismissMenu()
+                true
+            } else false
+        }
+        root.alpha = 0f
+        root.scaleX = 0.92f
+        root.scaleY = 0.92f
+        root.pivotX = if (right) 0f else w.toFloat()
+        root.pivotY = 0f
+        wm.addView(root, lpm)
+        menu = root
+        root.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(140).start()
     }
 
     // ---------------------------------------------------------------- Khung chính
 
     private fun showPanel() {
         if (panel != null) return
+        dismissMenu()
         bubble?.visibility = View.GONE
-        mini?.visibility = View.GONE
-        miniShown = false
+        eq?.setActive(false)
         buildPanel()
     }
 
@@ -482,7 +472,7 @@ class FloatingService : Service() {
         sugBox = null
         lineViews.clear()
         bubble?.visibility = View.VISIBLE
-        refreshMini()
+        refreshActivity()
         Cloud.autoSave(this)
     }
 
@@ -1079,7 +1069,7 @@ class FloatingService : Service() {
     private fun ytToggle() {
         yt?.evaluateJavascript(TOGGLE_JS, null)
         ytPlaying = !ytPlaying
-        refreshMini()
+        refreshActivity()
     }
 
     /** Đọc trạng thái video mỗi giây: tên, thời gian, đang phát hay tạm dừng. */
@@ -1089,7 +1079,7 @@ class FloatingService : Service() {
         if (!(url.contains("/watch") || url.contains("/shorts"))) {
             if (ytHas) {
                 ytHas = false
-                refreshMini()
+                refreshActivity()
             }
             return
         }
@@ -1109,7 +1099,7 @@ class FloatingService : Service() {
                     ytHas = false
                 }
             }
-            refreshMini()
+            refreshActivity()
         }
     }
 }
