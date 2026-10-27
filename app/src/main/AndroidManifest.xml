@@ -18,10 +18,13 @@
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
         android:label="Học Nổi"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:hardwareAccelerated="true"
+        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
 
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|density"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
