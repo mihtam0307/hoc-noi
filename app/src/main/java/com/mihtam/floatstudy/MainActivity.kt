@@ -50,6 +50,11 @@ class MainActivity : Activity() {
         super.onCreate(b)
         serverTxt = Cloud.server(this)
         emailTxt = Cloud.email(this) ?: ""
+        val log = CrashLog.read(this)
+        if (log != null) {
+            showCrash(log)
+            return
+        }
         render()
         checkUpdate(false)
     }
@@ -113,6 +118,11 @@ class MainActivity : Activity() {
 
     @Suppress("DEPRECATION")
     private fun bars(look: Look) {
+        try { barsInner(look) } catch (_: Throwable) {}
+    }
+
+    @Suppress("DEPRECATION")
+    private fun barsInner(look: Look) {
         window.statusBarColor = look.base
         window.navigationBarColor = look.base
         if (android.os.Build.VERSION.SDK_INT >= 30) {
@@ -127,8 +137,71 @@ class MainActivity : Activity() {
         }
     }
 
-    @Suppress("DEPRECATION")
+    private var crashShown = false
+
+    /** Dựng giao diện; nếu lỗi thì hiện màn hình báo lỗi (có nội dung lỗi) thay vì văng ra ngoài. */
     private fun render() {
+        if (crashShown) return
+        try {
+            renderInner()
+        } catch (e: Throwable) {
+            CrashLog.save(this, e)
+            showCrash(CrashLog.read(this) ?: e.toString())
+        }
+    }
+
+    /** Màn hình báo lỗi dùng toàn bộ view thuần của hệ thống, không phụ thuộc giao diện chính. */
+    private fun showCrash(text: String) {
+        crashShown = true
+        val p = Ui.dp(this, 16)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(p, p * 2, p, p)
+        }
+        col.addView(TextView(this).apply {
+            this.text = "Lần trước ứng dụng bị lỗi"
+            textSize = 20f
+            setTextColor(0xFF151823.toInt())
+        })
+        col.addView(TextView(this).apply {
+            this.text = "Hãy chụp màn hình này gửi để sửa, rồi bấm Tiếp tục."
+            textSize = 14f
+            setTextColor(0xFF555B6E.toInt())
+            setPadding(0, p / 2, 0, p)
+        })
+        val body = TextView(this).apply {
+            this.text = text
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(0xFF151823.toInt())
+            setTextIsSelectable(true)
+        }
+        col.addView(body)
+        col.addView(android.widget.Button(this).apply {
+            this.text = "Sao chép lỗi"
+            setOnClickListener {
+                val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("loi", text))
+                Toast.makeText(this@MainActivity, "Đã sao chép", Toast.LENGTH_SHORT).show()
+            }
+        })
+        col.addView(android.widget.Button(this).apply {
+            this.text = "Tiếp tục"
+            setOnClickListener {
+                CrashLog.clear(this@MainActivity)
+                crashShown = false
+                render()
+                checkUpdate(false)
+            }
+        })
+        val sv = ScrollView(this)
+        sv.setBackgroundColor(0xFFFFFFFF.toInt())
+        sv.addView(col)
+        setContentView(sv)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun renderInner() {
         scroll?.let { scrollY = it.scrollY }
         val look = Look(this, "m")
         bars(look)
