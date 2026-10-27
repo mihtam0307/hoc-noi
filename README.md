@@ -25,3 +25,8 @@ App mở lên sẽ hỏi GitHub bản mới nhất, thấy số lớn hơn thì 
 - App nổi có 2 tab: **Đọc** (đọc tự động, lặp, công thức) và **YouTube** (WebView m.youtube.com, ô tìm kiếm + gợi ý thời gian thực).
 - Thu nhỏ khung: tiếng đọc / video vẫn chạy; hình nổi hiện **thanh nhạc chuyển động** khi đang phát. Chạm hình nổi để mở menu nhỏ (phát/tạm dừng, dừng đọc, Đọc tự động, YouTube, Cài đặt, Tắt app nổi).
 - Khung phủ kín màn hình, cách rìa 10dp, tự theo hướng xoay (cửa sổ MATCH_PARENT + đệm theo vùng an toàn); WebView được giữ nguyên khi xoay nên video không bị ngắt.
+
+## 4. Màn hình ngang (v3)
+- Xoay ngang: hình nổi tròn ẩn đi, thay bằng **thanh nhỏ ở mép trái** (kéo lên/xuống để dời chỗ). Vuốt thanh sang phải (hoặc chạm) để mở khung.
+- Khung chiếm khoảng **nửa màn hình** (tab Đọc / YouTube giữ nguyên). Chạm vùng trống bên ngoài khung để đóng.
+- Xoay dọc thì quay lại hình nổi tròn như cũ.

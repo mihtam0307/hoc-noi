@@ -14,6 +14,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.RippleDrawable
 import android.os.SystemClock
@@ -85,6 +86,13 @@ class FloatingService : Service() {
     private var bubbleLp: WindowManager.LayoutParams? = null
     private var panel: FrameLayout? = null
     private var host: FrameLayout? = null          // cửa sổ 1px giữ WebView sống khi khung bị thu nhỏ
+
+    // Chế độ ngang: thanh vuốt ở mép trái + khung nửa màn hình
+    private var handle: FrameLayout? = null
+    private var handleLp: WindowManager.LayoutParams? = null
+    private var handlePill: View? = null
+    private var handleActive = false
+    private var animateIn = false
 
 
     // Trạng thái khung đọc (giữ lại khi dựng lại giao diện)
@@ -170,6 +178,7 @@ class FloatingService : Service() {
             startForeground(1, n)
         }
         showBubble()
+        applyMode()
         Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
     }
 
@@ -187,7 +196,8 @@ class FloatingService : Service() {
         ui.postDelayed({
             dismissMenu()
             clampBubble()
-            if (panel != null) buildPanel()
+            clampHandle()
+            if (panel != null) buildPanel() else applyMode()
         }, 150)
     }
 
@@ -207,6 +217,7 @@ class FloatingService : Service() {
         host?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         menu?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         bubble?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        handle?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         super.onDestroy()
     }
 
@@ -336,6 +347,10 @@ class FloatingService : Service() {
     private fun refreshActivity() {
         val active = panel == null && ((ytHas && ytPlaying) || speaker.speaking)
         eq?.setActive(active)
+        if (active != handleActive) {
+            handleActive = active
+            paintHandle()
+        }
     }
 
     private class MenuItem(val ic: Ic, val label: String, val danger: Boolean, val act: () -> Unit)
@@ -454,7 +469,9 @@ class FloatingService : Service() {
         if (panel != null) return
         dismissMenu()
         bubble?.visibility = View.GONE
+        handle?.visibility = View.GONE
         eq?.setActive(false)
+        animateIn = true
         buildPanel()
     }
 
@@ -471,7 +488,7 @@ class FloatingService : Service() {
         ytEt = null
         sugBox = null
         lineViews.clear()
-        bubble?.visibility = View.VISIBLE
+        applyMode()
         refreshActivity()
         Cloud.autoSave(this)
     }
@@ -532,7 +549,9 @@ class FloatingService : Service() {
 
         val look = Look(this, "f")
         curLook = look
-        val land = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val land = isLand()
+        val anim = animateIn
+        animateIn = false
         val textSp = Prefs.int(this, "text_size", 18).toFloat()
         val margin = Ui.dp(this, 10)       // khoảng cách nhỏ từ khung tới rìa màn hình
         val pad = Ui.dp(this, 14)
@@ -548,6 +567,7 @@ class FloatingService : Service() {
             }
         }
         root.setPadding(margin, margin, margin, margin)
+        root.clipToPadding = false
         root.setOnApplyWindowInsetsListener { v, ins ->
             val i = insetsOf(ins)
             v.setPadding(margin + i[0], margin + i[1], margin + i[2], margin + i[3])
@@ -559,7 +579,21 @@ class FloatingService : Service() {
         card.clipToOutline = true
         card.outlineProvider = ViewOutlineProvider.BACKGROUND
         Ui.bgImage(this, look)?.let { card.addView(it, FrameLayout.LayoutParams(-1, -1)) }
-        root.addView(card, FrameLayout.LayoutParams(-1, -1))
+        if (land) {
+            // Ngang: khung chiếm khoảng nửa màn hình, chạm vùng trống bên ngoài để đóng.
+            val (sw, _) = screen()
+            val cardW = minOf((sw * 0.5f).toInt(), sw - 2 * margin - d(8)).coerceAtLeast(d(260))
+            card.isClickable = true
+            root.addView(card, FrameLayout.LayoutParams(cardW, -1, Gravity.START))
+            root.setOnClickListener { ui.post { if (panel === root) hidePanel() } }
+            if (anim) {
+                card.translationX = -(cardW + margin).toFloat()
+                card.animate().translationX(0f).setDuration(230)
+                    .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+            }
+        } else {
+            root.addView(card, FrameLayout.LayoutParams(-1, -1))
+        }
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -621,12 +655,116 @@ class FloatingService : Service() {
             hardware(), PixelFormat.TRANSLUCENT
         )
         wl.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-        if (Build.VERSION.SDK_INT >= 31) {
+        if (Build.VERSION.SDK_INT >= 31 && !land) {
             wl.flags = wl.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
             wl.blurBehindRadius = Ui.dp(this, 20)
         }
         wm.addView(root, wl)
         panel = root
+    }
+
+    // ---------------------------------------------------------------- Chế độ ngang: thanh vuốt mép trái
+
+    private fun d(v: Int) = Ui.dp(this, v)
+
+    private fun isLand(): Boolean {
+        val (w, h) = screen()
+        return w > h
+    }
+
+    /** Dọc: hiện hình nổi tròn. Ngang: ẩn hình nổi, hiện thanh nhỏ ở mép trái (vuốt ra hoặc chạm để mở khung). */
+    private fun applyMode() {
+        if (panel != null) return
+        dismissMenu()
+        if (isLand()) {
+            bubble?.visibility = View.GONE
+            showHandle()
+            handle?.visibility = View.VISIBLE
+        } else {
+            bubble?.visibility = View.VISIBLE
+            handle?.visibility = View.GONE
+        }
+    }
+
+    private fun paintHandle() {
+        val p = handlePill ?: return
+        val col = if (handleActive) Look(this, "f").accent else 0xCC2B2F3A.toInt()
+        p.background = Ui.rr(col, 3, 0x66FFFFFF)
+    }
+
+    private fun clampHandle() {
+        val h = handle ?: return
+        val l = handleLp ?: return
+        val (_, sh) = screen()
+        l.y = l.y.coerceIn(0, maxOf(0, sh - l.height))
+        try { wm.updateViewLayout(h, l) } catch (_: Exception) {}
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showHandle() {
+        if (handle != null) return
+        val w = d(28)
+        val h = d(120)
+        val root = FrameLayout(this)
+        val pill = View(this)
+        handlePill = pill
+        root.addView(pill, FrameLayout.LayoutParams(d(5), d(56), Gravity.CENTER_VERTICAL or Gravity.START).apply {
+            marginStart = d(3)
+        })
+        val lp = WindowManager.LayoutParams(
+            w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+        )
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.x = 0
+        val saved = Prefs.int(this, "handle_y", -1)
+        lp.y = if (saved >= 0) saved else screen().second / 3
+        handleLp = lp
+        handle = root
+        if (Build.VERSION.SDK_INT >= 29) {
+            root.setSystemGestureExclusionRects(listOf(Rect(0, 0, w, h)))
+        }
+
+        var downX = 0f
+        var downY = 0f
+        var startY = 0
+        var mode = 0 // 0 = chưa rõ, 1 = kéo dọc để dời thanh, 2 = đã vuốt ra
+        root.setOnTouchListener { v, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX; downY = ev.rawY
+                    startY = lp.y
+                    mode = 0
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = ev.rawX - downX
+                    val dy = ev.rawY - downY
+                    if (mode == 0) {
+                        if (dx > d(18) && dx > abs(dy)) {
+                            mode = 2
+                            openPanel(tab, false)
+                        } else if (abs(dy) > d(10) && abs(dy) > abs(dx)) {
+                            mode = 1
+                        }
+                    }
+                    if (mode == 1) {
+                        val (_, sh) = screen()
+                        lp.y = (startY + dy.toInt()).coerceIn(0, maxOf(0, sh - lp.height))
+                        try { wm.updateViewLayout(v, lp) } catch (_: Exception) {}
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (mode == 0) openPanel(tab, false)
+                    if (mode == 1) Prefs.putI(this, "handle_y", lp.y)
+                    true
+                }
+                else -> false
+            }
+        }
+        wm.addView(root, lp)
+        paintHandle()
     }
 
     // ---------------------------------------------------------------- Tab đọc tự động
