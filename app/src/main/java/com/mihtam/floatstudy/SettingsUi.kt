@@ -60,6 +60,11 @@ object SettingsUi {
                 Prefs.putI(c, "handle_side", it); onChanged()
             }, 18)
 
+            title("LÀM MỜ NỀN SAU KHUNG (ANDROID 12+, ÁP DỤNG LẦN MỞ KHUNG SAU)")
+            add(Ui.chips(c, look, listOf("Tắt (mượt khi chơi game)", "Bật"), Prefs.int(c, "blur", 0).coerceIn(0, 1)) {
+                Prefs.putI(c, "blur", it); onChanged()
+            }, 18)
+
             title("CHỮ & GIỌNG ĐỌC")
             add(Ui.slider(c, look, "Cỡ chữ", 14, 32, Prefs.int(c, "text_size", 18), { "${it}sp" }) {
                 Prefs.putI(c, "text_size", it); onChanged()

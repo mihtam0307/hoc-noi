@@ -1,6 +1,6 @@
 # Học Nổi
 
-App Android (Kotlin, không thư viện ngoài): app gốc + app nổi đọc tự động, lưu Drive, tự cập nhật.
+App Android (Kotlin, chỉ dùng thêm ML Kit để nhận chữ từ ảnh): app gốc + app nổi đọc tự động, lưu Drive, tự cập nhật.
 
 ## 1. Máy chủ Drive (Apps Script)
 1. script.google.com > Dự án mới > dán nội dung `server/Code.gs`.
@@ -24,12 +24,18 @@ App mở lên sẽ hỏi GitHub bản mới nhất, thấy số lớn hơn thì 
 - Mặc định màu **trắng**; mọi icon đều tự vẽ (`Widgets.kt`), không dùng icon/emoji của hệ thống.
 - App nổi có 2 tab: **Đọc** (đọc tự động, lặp, công thức) và **YouTube** (WebView m.youtube.com, ô tìm kiếm + gợi ý thời gian thực).
 - Thu nhỏ khung: tiếng đọc / video vẫn chạy; hình nổi hiện **thanh nhạc chuyển động** khi đang phát. Chạm hình nổi để mở menu nhỏ (phát/tạm dừng, dừng đọc, Đọc tự động, YouTube, Cài đặt, Tắt app nổi).
+- Làm mờ nền phía sau khung (Android 12+) **mặc định tắt** vì rất nặng GPU, mở khung lúc đang chơi game sẽ giật làm video dừng; bật lại trong Cài đặt > Làm mờ nền.
 - Khung phủ kín màn hình, cách rìa 10dp, tự theo hướng xoay (cửa sổ MATCH_PARENT + đệm theo vùng an toàn); WebView được giữ nguyên khi xoay nên video không bị ngắt.
+
+## 3b. Lấy chữ từ ảnh
+Tab **Đọc** > nút **Lấy chữ từ ảnh**: chọn ảnh chụp màn hình trong máy, app nhận chữ (ML Kit, chạy trên máy) rồi thêm vào ô nhập và danh sách dòng.
+Mỗi khối chữ là 1 dòng; chưa tự đọc để bạn sửa lỗi nhận chữ trước. Model do Google Play Services tải (lần đầu cần mạng), máy cần có Google Play Services.
 
 ## 4. Màn hình ngang (v3)
 - Ngang: không còn hình nổi, thay bằng **thanh vuốt nhỏ ở rìa** (mặc định cạnh trái, đổi trong Tùy chỉnh > Thanh vuốt). Vuốt vào hoặc chạm để mở; kéo dọc để dời thanh lên/xuống.
 - Mở ra là **hình chữ nhật gần nửa màn hình** và **thanh dọc** bên trái nó: 3 tab **Đọc / YouTube / Google** và 3 nút **Phát / Dừng / Tua** (Tua: chạm = tới 10 giây, nhấn giữ = lùi 10 giây). Chạm ra ngoài hoặc nút mũi tên xuống để thu lại.
 - Khi khung thu lại, thanh vuốt chỉ còn thanh nhỏ, **không còn nút Phát / Dừng / Tua ở ngoài**; muốn điều khiển thì vuốt mở khung rồi dùng thanh dọc bên trong.
+- Tab **YouTube** (màn ngang): có nút **danh sách** cạnh nút Home (chỉ hiện khi đang xem video). Bật thì video thu nhỏ để lộ danh sách bên dưới, tắt thì video choán cả khung.
 - Tab **Google** mở trang google.com ngay trong khung, giống tab YouTube (dọc cũng có).
 - YouTube đã bấm phát thì giữ phát khi thu nhỏ / phóng to / xoay; chỉ dừng khi bấm Dừng (hoặc tự chạm tạm dừng trong video).
 - Nếu video bị dừng không do người dùng (vào app khác, app khác chiếm âm thanh...), app tự phát lại ngay thay vì dừng hẳn.

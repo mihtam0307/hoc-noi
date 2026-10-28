@@ -41,3 +41,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // Nhận chữ từ ảnh (chạy trên máy; model do Google Play Services tải, APK không phình to)
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
+}

@@ -151,6 +151,8 @@ class FloatingService : Service() {
     private var ytPlaying = false
     private var ytWant = false          // đã bấm phát: giữ phát đều khi thu nhỏ / phóng to, chỉ dừng khi người dùng dừng
     private var ytMoveAt = 0L
+    private var ytListOpen = false      // màn ngang: bật thì thu hẹp video để lộ danh sách bên dưới
+    private var ytListBtn: IconBtn? = null
     private var ytTitle = ""
     private var ytTime = 0.0
     private var ytDur = 0.0
@@ -709,6 +711,21 @@ class FloatingService : Service() {
         ui.post { panel?.visibility = View.VISIBLE }
     }
 
+    /** Chữ lấy từ ảnh (PickActivity gọi): thêm vào ô nhập của tab Đọc và dựng lại danh sách dòng, chưa tự đọc để bạn kiểm tra lại. */
+    fun onOcrText(text: String) {
+        ui.post {
+            if (text.isBlank()) {
+                Toast.makeText(this, "Không thấy chữ nào trong ảnh", Toast.LENGTH_LONG).show()
+                return@post
+            }
+            inputText = if (inputText.isBlank()) text else inputText.trimEnd() + "\n" + text
+            Prefs.putS(this, "content", inputText)
+            lines = parse(inputText)
+            curLine = -1
+            if (panel != null) buildPanel()
+        }
+    }
+
     private fun pick(key: String) {
         panel?.visibility = View.GONE
         startActivity(
@@ -874,7 +891,8 @@ class FloatingService : Service() {
             hardware(), PixelFormat.TRANSLUCENT
         )
         wl.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-        if (Build.VERSION.SDK_INT >= 31) {
+        // Làm mờ nền phía sau rất nặng GPU: mặc định TẮT để không giật khi mở khung lúc đang chơi game / xem video.
+        if (Build.VERSION.SDK_INT >= 31 && Prefs.int(this, "blur", 0) == 1) {
             wl.flags = wl.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
             wl.blurBehindRadius = Ui.dp(this, 20)
         }
@@ -1164,6 +1182,11 @@ class FloatingService : Service() {
                 curLine = -1
                 buildPanel()
             }))
+        controls.addView(Ui.gap(this, 10))
+        controls.addView(Ui.btn(this, look, "Lấy chữ từ ảnh", false, Ic.IMAGE, land) {
+            hideKeyboard(et)
+            pick("ocr")
+        }, lp(-1, -2))
         controls.addView(Ui.gap(this, 14))
         controls.addView(Ui.tv(this, look, "LẶP LẠI", 12f, true, true))
         controls.addView(Ui.gap(this, 6))
@@ -1459,6 +1482,12 @@ class FloatingService : Service() {
             marginStart = Ui.dp(this@FloatingService, 8)
             marginEnd = Ui.dp(this@FloatingService, 8)
         })
+        val listBtn = Ui.iconBtn(this, look, Ic.LIST, 42) { toggleYtList() }
+        listBtn.visibility = View.GONE
+        ytListBtn = listBtn
+        row.addView(listBtn, LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42)).apply {
+            marginEnd = Ui.dp(this@FloatingService, 6)
+        })
         row.addView(Ui.iconBtn(this, look, Ic.HOME, 42) {
             ytQuery = ""
             et.setText("")
@@ -1496,6 +1525,37 @@ class FloatingService : Service() {
         col.addView(holder, lp(-1, 0, 1f))
         w.onResume()
         onYtMoved()
+        holder.post { applyYtList() }
+    }
+
+    private fun toggleYtList() {
+        ytListOpen = !ytListOpen
+        applyYtList()
+    }
+
+    /**
+     * Nút danh sách chỉ hiện khi xoay ngang và đang xem video. Bật thì thu hẹp WebView còn ~55% bề rộng:
+     * video nhỏ lại và danh sách gợi ý bên dưới hiện ra; tắt thì video lại choán cả khung.
+     */
+    private fun applyYtList() {
+        val w = yt ?: return
+        val h = ytHolder ?: return
+        val show = ytHas && isLand()
+        ytListBtn?.let {
+            it.visibility = if (show) View.VISIBLE else View.GONE
+            val look = curLook
+            if (look != null) it.iv.set(Ic.LIST, if (ytListOpen) look.accent else look.text)
+        }
+        if (w.parent !== h) return
+        val lpw = w.layoutParams as? FrameLayout.LayoutParams ?: return
+        val full = h.width
+        if (full <= 0) return
+        val target = if (show && ytListOpen) (full * 0.55f).toInt() else FrameLayout.LayoutParams.MATCH_PARENT
+        if (lpw.width != target) {
+            lpw.width = target
+            lpw.gravity = Gravity.CENTER_HORIZONTAL
+            w.layoutParams = lpw
+        }
     }
 
     private fun ytSearch(q: String) {
@@ -1624,6 +1684,7 @@ class FloatingService : Service() {
                 }
             }
             refreshActivity()
+            applyYtList()
         }
     }
 }
