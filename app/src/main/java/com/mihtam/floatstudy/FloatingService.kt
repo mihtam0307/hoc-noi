@@ -1,12 +1,14 @@
 package com.mihtam.floatstudy
 
 import android.annotation.SuppressLint
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.pm.ServiceInfo
@@ -15,14 +17,17 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.RippleDrawable
 import android.os.SystemClock
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputType
 import android.text.TextUtils
@@ -117,6 +122,8 @@ class FloatingService : Service() {
     private var dockPlay: IconBtn? = null
     private var dockStop: IconBtn? = null
     private var pickerOpen = false
+    private var cardView: View? = null
+    private var hintedFreeform = false
     private var appCache: List<AppEntry>? = null
 
 
@@ -396,9 +403,9 @@ class FloatingService : Service() {
 
     private fun handleBtn(ic: Ic, onClick: () -> Unit): FrameLayout {
         val f = FrameLayout(this)
-        f.background = Ui.rr(0xE61B1F2E.toInt(), 17, 0x33FFFFFF, 1)
+        f.background = Ui.rr(0xE61B1F2E.toInt(), 14, 0x33FFFFFF, 1)
         val iv = IconView(this, ic, Color.WHITE)
-        f.addView(iv, FrameLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18), Gravity.CENTER))
+        f.addView(iv, FrameLayout.LayoutParams(Ui.dp(this, 14), Ui.dp(this, 14), Gravity.CENTER))
         f.tag = iv
         f.isClickable = true
         f.setOnClickListener { onClick() }
@@ -410,27 +417,27 @@ class FloatingService : Service() {
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         val pill = View(this)
-        pill.background = Ui.rr(0xE6FFFFFF.toInt(), 3, 0x66000000, 1)
-        root.addView(pill, LinearLayout.LayoutParams(Ui.dp(this, 6), Ui.dp(this, 56)).apply {
-            topMargin = Ui.dp(this@FloatingService, 16)
-            bottomMargin = Ui.dp(this@FloatingService, 16)
+        pill.background = Ui.rr(0xE6FFFFFF.toInt(), 2, 0x66000000, 1)
+        root.addView(pill, LinearLayout.LayoutParams(Ui.dp(this, 4), Ui.dp(this, 36)).apply {
+            topMargin = Ui.dp(this@FloatingService, 12)
+            bottomMargin = Ui.dp(this@FloatingService, 12)
         })
         handlePill = pill
         val play = handleBtn(Ic.PLAY) { ytToggle() }
         val stop = handleBtn(Ic.STOP) { speaker.stop() }
         play.visibility = View.GONE
         stop.visibility = View.GONE
-        root.addView(play, LinearLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 34)).apply {
+        root.addView(play, LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28)).apply {
             bottomMargin = Ui.dp(this@FloatingService, 6)
         })
-        root.addView(stop, LinearLayout.LayoutParams(Ui.dp(this, 34), Ui.dp(this, 34)).apply {
+        root.addView(stop, LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28)).apply {
             bottomMargin = Ui.dp(this@FloatingService, 6)
         })
         hPlay = play
         hStop = stop
 
         val wlp = WindowManager.LayoutParams(
-            Ui.dp(this, 40), Ui.dp(this, 88), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            Ui.dp(this, 30), Ui.dp(this, 60), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT
         )
@@ -508,8 +515,8 @@ class FloatingService : Service() {
         for (i in 0 until root.childCount) {
             val lp = root.getChildAt(i).layoutParams as LinearLayout.LayoutParams
             lp.gravity = g
-            lp.leftMargin = if (side == 0) Ui.dp(this, 4) else 0
-            lp.rightMargin = if (side == 0) 0 else Ui.dp(this, 4)
+            lp.leftMargin = if (side == 0) Ui.dp(this, 2) else 0
+            lp.rightMargin = if (side == 0) 0 else Ui.dp(this, 2)
         }
         root.requestLayout()
         try { wm.updateViewLayout(root, wlp) } catch (_: Exception) {}
@@ -529,7 +536,7 @@ class FloatingService : Service() {
         (play.tag as? IconView)?.set(if (ytPlaying) Ic.PAUSE else Ic.PLAY)
         stop.visibility = if (showStop) View.VISIBLE else View.GONE
         val n = (if (showPlay) 1 else 0) + (if (showStop) 1 else 0)
-        wlp.height = Ui.dp(this, 88 + 40 * n)
+        wlp.height = Ui.dp(this, 60 + 34 * n)
         applyHandle()
     }
 
@@ -814,6 +821,7 @@ class FloatingService : Service() {
         card.clipToOutline = true
         card.outlineProvider = ViewOutlineProvider.BACKGROUND
         Ui.bgImage(this, look)?.let { card.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        cardView = card
 
         if (land) {
             // Ngang: ngăn kéo ra từ rìa = thanh dọc (tab + ứng dụng) bên trái + hình chữ nhật gần nửa màn hình
@@ -1053,7 +1061,32 @@ class FloatingService : Service() {
         }
     }
 
-    /** Mở ứng dụng như bình thường (toàn màn hình), khung tự thu lại về thanh vuốt. */
+    private fun freeformOn(): Boolean {
+        if (packageManager.hasSystemFeature(PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT)) return true
+        return try {
+            Settings.Global.getInt(contentResolver, "enable_freeform_support", 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Tùy chọn mở ứng dụng dạng cửa sổ nhỏ (freeform) đúng vùng [r]. */
+    private fun miniOptions(r: Rect): Bundle? = try {
+        val o = ActivityOptions.makeBasic()
+        o.setLaunchBounds(r)
+        try {
+            ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType).invoke(o, 5)
+        } catch (_: Throwable) {
+        }
+        o.toBundle()
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
+     * Mở ứng dụng: ở màn ngang thì cố mở dạng cửa sổ mini ngay vị trí hình chữ nhật (cần máy bật cửa sổ tự do),
+     * không được thì mở toàn màn hình như bình thường. Khung tự thu lại về thanh vuốt.
+     */
     private fun launchApp(pkg: String) {
         val intent = packageManager.getLaunchIntentForPackage(pkg)
         if (intent == null) {
@@ -1061,11 +1094,33 @@ class FloatingService : Service() {
             return
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        var rect: Rect? = null
+        val c = cardView
+        if (isLand() && c != null && c.width > 0 && c.height > 0) {
+            val a = IntArray(2)
+            c.getLocationOnScreen(a)
+            rect = Rect(a[0], a[1], a[0] + c.width, a[1] + c.height)
+        }
+        val free = freeformOn()
+        val opts = if (rect != null && free) miniOptions(rect) else null
         hidePanel()
         try {
-            startActivity(intent)
+            if (opts != null) startActivity(intent, opts) else startActivity(intent)
         } catch (_: Exception) {
-            Toast.makeText(this, "Không mở được ứng dụng này", Toast.LENGTH_SHORT).show()
+            try {
+                startActivity(intent)
+            } catch (_: Exception) {
+                Toast.makeText(this, "Không mở được ứng dụng này", Toast.LENGTH_SHORT).show()
+            }
+        }
+        if (rect != null && !free && !hintedFreeform) {
+            hintedFreeform = true
+            Toast.makeText(
+                this,
+                "Máy chưa bật cửa sổ tự do nên ứng dụng mở toàn màn hình. Bật trong Tùy chọn nhà phát triển: " +
+                    "“Bật cửa sổ dạng tự do” và “Buộc các hoạt động có thể thay đổi kích thước”.",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
