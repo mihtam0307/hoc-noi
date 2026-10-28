@@ -170,6 +170,7 @@ object Ui {
         box.gravity = Gravity.CENTER_VERTICAL
         box.setPadding(dp(c, 4), dp(c, 4), dp(c, 4), dp(c, 4))
         box.background = rr(look.tonal, 16)
+        val many = items.size > 2
         items.forEachIndexed { i, (ic, label) ->
             val on = i == sel
             val col = if (on) look.onAccent else look.muted
@@ -179,7 +180,7 @@ object Ui {
             cell.setPadding(dp(c, 8), dp(c, 9), dp(c, 8), dp(c, 9))
             if (on) cell.background = rr(look.accent, 12)
             val iv = icon(c, ic, col, 18)
-            (iv.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(c, 7)
+            (iv.layoutParams as LinearLayout.LayoutParams).marginEnd = if (many && !on) 0 else dp(c, 7)
             cell.addView(iv)
             val t = TextView(c)
             t.text = label
@@ -187,9 +188,10 @@ object Ui {
             t.setTypeface(t.typeface, Typeface.BOLD)
             t.setTextColor(col)
             t.maxLines = 1
+            if (many && !on) t.visibility = View.GONE
             cell.addView(t)
             cell.setOnClickListener { if (!on) onSel(i) }
-            box.addView(cell, LinearLayout.LayoutParams(0, -2, 1f))
+            box.addView(cell, LinearLayout.LayoutParams(0, -2, if (many && on) 2f else 1f))
         }
         return box
     }

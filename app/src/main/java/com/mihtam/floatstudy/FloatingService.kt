@@ -1,14 +1,12 @@
 package com.mihtam.floatstudy
 
 import android.annotation.SuppressLint
-import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.content.pm.ServiceInfo
@@ -17,17 +15,13 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.graphics.Typeface
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.RippleDrawable
 import android.os.SystemClock
 import android.os.Build
-import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.provider.Settings
 import android.text.Editable
 import android.text.InputType
 import android.text.TextUtils
@@ -71,12 +65,15 @@ class FloatingService : Service() {
         const val A_STOP_READ = "stopread"
         const val CH = "float_study"
         private const val HOME = "https://m.youtube.com"
+        private const val GHOME = "https://www.google.com/?hl=vi"
         private const val POLL_JS =
             "(function(){var v=document.querySelector('video');if(!v||!v.duration)return '';" +
             "var t=document.title.replace(/ - YouTube\$/,'');" +
             "return JSON.stringify({p:!v.paused&&!v.ended,t:v.currentTime,d:v.duration,n:t});})()"
         private const val TOGGLE_JS =
             "(function(){var v=document.querySelector('video');if(v){if(v.paused){v.play()}else{v.pause()}}})()"
+        private const val PAUSE_JS =
+            "(function(){var v=document.querySelector('video');if(v&&!v.paused)v.pause()})()"
         private const val PLAY_JS =
             "(function(){var v=document.querySelector('video');if(v&&v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}})()"
         /** Chặn trang biết mình đang bị ẩn (Page Visibility) để YouTube không tự dừng khi thu nhỏ / phóng to khung. */
@@ -90,8 +87,6 @@ class FloatingService : Service() {
             "window.addEventListener('webkitvisibilitychange',s,true);document.addEventListener('webkitvisibilitychange',s,true);" +
             "}catch(e){}})()"
     }
-
-    private class AppEntry(val pkg: String, val label: String, val icon: Drawable)
 
     private lateinit var wm: WindowManager
     private lateinit var speaker: Speaker
@@ -113,18 +108,9 @@ class FloatingService : Service() {
     private var handleLp: WindowManager.LayoutParams? = null
     private var hPlay: FrameLayout? = null
     private var hStop: FrameLayout? = null
+    private var hSeek: FrameLayout? = null
     private var hSig = -1
     private var slideIn = false
-
-    // Thanh ứng dụng cạnh khung + nút phát/dừng trên tiêu đề (khi xoay ngang)
-    private var dockBox: LinearLayout? = null
-    private var dockPop: FrameLayout? = null
-    private var dockPlay: IconBtn? = null
-    private var dockStop: IconBtn? = null
-    private var pickerOpen = false
-    private var cardView: View? = null
-    private var hintedFreeform = false
-    private var appCache: List<AppEntry>? = null
 
 
     // Trạng thái khung đọc (giữ lại khi dựng lại giao diện)
@@ -168,6 +154,13 @@ class FloatingService : Service() {
     private var customView: View? = null
     private var customCb: WebChromeClient.CustomViewCallback? = null
 
+    // Google
+    private var gg: WebView? = null
+    private var ggEt: EditText? = null
+    private var ggBack: IconBtn? = null
+    private var ggProgress: ProgressLine? = null
+    private var ggQuery = ""
+
     private val pollRun = object : Runnable {
         override fun run() {
             pollYt()
@@ -201,7 +194,7 @@ class FloatingService : Service() {
         inputText = Prefs.str(this, "content") ?: ""
         lines = parse(inputText)
         repeatIdx = Prefs.int(this, "repeat", 0).coerceIn(0, 5)
-        tab = Prefs.int(this, "last_tab", 0).coerceIn(0, 1)
+        tab = Prefs.int(this, "last_tab", 0).coerceIn(0, 2)
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         speaker = Speaker(this)
         speaker.onLine = { i, p -> curLine = i; pass = p; refreshStatus(); highlight(); refreshActivity() }
@@ -253,6 +246,11 @@ class FloatingService : Service() {
             try { it.destroy() } catch (_: Exception) {}
         }
         yt = null
+        gg?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            try { it.destroy() } catch (_: Exception) {}
+        }
+        gg = null
         panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         host?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         menu?.let { try { wm.removeView(it) } catch (_: Exception) {} }
@@ -401,14 +399,17 @@ class FloatingService : Service() {
         if (land || open) dismissMenu()
     }
 
-    private fun handleBtn(ic: Ic, onClick: () -> Unit): FrameLayout {
+    private fun handleBtn(ic: Ic, onClick: () -> Unit, onLong: (() -> Unit)? = null): FrameLayout {
         val f = FrameLayout(this)
         f.background = Ui.rr(0xE61B1F2E.toInt(), 14, 0x33FFFFFF, 1)
         val iv = IconView(this, ic, Color.WHITE)
         f.addView(iv, FrameLayout.LayoutParams(Ui.dp(this, 14), Ui.dp(this, 14), Gravity.CENTER))
-        f.tag = iv
         f.isClickable = true
         f.setOnClickListener { onClick() }
+        if (onLong != null) f.setOnLongClickListener {
+            onLong()
+            true
+        }
         return f
     }
 
@@ -423,18 +424,18 @@ class FloatingService : Service() {
             bottomMargin = Ui.dp(this@FloatingService, 12)
         })
         handlePill = pill
-        val play = handleBtn(Ic.PLAY) { ytToggle() }
-        val stop = handleBtn(Ic.STOP) { speaker.stop() }
-        play.visibility = View.GONE
-        stop.visibility = View.GONE
-        root.addView(play, LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28)).apply {
-            bottomMargin = Ui.dp(this@FloatingService, 6)
-        })
-        root.addView(stop, LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28)).apply {
-            bottomMargin = Ui.dp(this@FloatingService, 6)
-        })
+        val play = handleBtn(Ic.PLAY, { mediaPlay() })
+        val stop = handleBtn(Ic.STOP, { mediaStop() })
+        val seek = handleBtn(Ic.SEEK, { mediaSeek(10) }, { mediaSeek(-10) })
+        for (b in listOf(play, stop, seek)) {
+            b.visibility = View.GONE
+            root.addView(b, LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28)).apply {
+                bottomMargin = Ui.dp(this@FloatingService, 6)
+            })
+        }
         hPlay = play
         hStop = stop
+        hSeek = seek
 
         val wlp = WindowManager.LayoutParams(
             Ui.dp(this, 30), Ui.dp(this, 60), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -522,20 +523,21 @@ class FloatingService : Service() {
         try { wm.updateViewLayout(root, wlp) } catch (_: Exception) {}
     }
 
-    /** Thanh vuốt hiện thêm nút phát/dừng video và dừng đọc khi đang có video / đang đọc. */
+    /** Thanh vuốt hiện thêm Phát / Dừng / Tua khi đang có video, hoặc Dừng khi đang đọc. */
     private fun refreshHandle() {
         val play = hPlay ?: return
         val stop = hStop ?: return
+        val seek = hSeek ?: return
         val wlp = handleLp ?: return
-        val showPlay = ytHas
-        val showStop = speaker.speaking
-        val sig = (if (showPlay) 1 else 0) or (if (showStop) 2 else 0) or (if (ytPlaying) 4 else 0)
+        val sig = (if (ytHas) 1 else 0) or (if (speaker.speaking) 2 else 0)
         if (sig == hSig) return
         hSig = sig
-        play.visibility = if (showPlay) View.VISIBLE else View.GONE
-        (play.tag as? IconView)?.set(if (ytPlaying) Ic.PAUSE else Ic.PLAY)
-        stop.visibility = if (showStop) View.VISIBLE else View.GONE
-        val n = (if (showPlay) 1 else 0) + (if (showStop) 1 else 0)
+        val vid = ytHas
+        val any = ytHas || speaker.speaking
+        play.visibility = if (vid) View.VISIBLE else View.GONE
+        seek.visibility = if (vid) View.VISIBLE else View.GONE
+        stop.visibility = if (any) View.VISIBLE else View.GONE
+        val n = (if (vid) 2 else 0) + (if (any) 1 else 0)
         wlp.height = Ui.dp(this, 60 + 34 * n)
         applyHandle()
     }
@@ -544,7 +546,6 @@ class FloatingService : Service() {
         if (panel != null) return
         slideIn = true
         settingsOpen = false
-        pickerOpen = false
         showPanel()
     }
 
@@ -559,29 +560,37 @@ class FloatingService : Service() {
     private fun refreshActivity() {
         val active = panel == null && ((ytHas && ytPlaying) || speaker.speaking)
         eq?.setActive(active)
-        syncMedia()
         refreshHandle()
     }
 
-    /** Cập nhật nút phát/dừng trên tiêu đề khung (màn ngang). */
-    private fun syncMedia() {
-        dockPlay?.let {
-            it.visibility = if (ytHas) View.VISIBLE else View.GONE
-            it.iv.set(if (ytPlaying) Ic.PAUSE else Ic.PLAY)
+    // ---- Phát / Dừng / Tua: dùng chung cho thanh vuốt (khi thu lại) và thanh dọc (khi mở)
+
+    private fun mediaPlay() {
+        if (!ytHas) {
+            Toast.makeText(this, "Chưa có video YouTube đang mở", Toast.LENGTH_SHORT).show()
+            return
         }
-        dockStop?.visibility = if (speaker.speaking) View.VISIBLE else View.GONE
+        yt?.evaluateJavascript(PLAY_JS, null)
+        ytPlaying = true
+        ytWant = true
+        refreshActivity()
     }
 
-    private fun addMediaBtns(head: LinearLayout, look: Look) {
-        val play = Ui.iconBtn(this, look, if (ytPlaying) Ic.PAUSE else Ic.PLAY, 40, true) { ytToggle() }
-        val stop = Ui.iconBtn(this, look, Ic.STOP, 40) { speaker.stop() }
-        (play.layoutParams as LinearLayout.LayoutParams).marginStart = Ui.dp(this, 8)
-        (stop.layoutParams as LinearLayout.LayoutParams).marginStart = Ui.dp(this, 8)
-        dockPlay = play
-        dockStop = stop
-        head.addView(play)
-        head.addView(stop)
-        syncMedia()
+    /** Dừng video (không tự phát lại nữa) và dừng đọc. */
+    private fun mediaStop() {
+        yt?.evaluateJavascript(PAUSE_JS, null)
+        ytPlaying = false
+        ytWant = false
+        speaker.stop()
+        refreshActivity()
+    }
+
+    private fun mediaSeek(sec: Int) {
+        if (!ytHas) return
+        yt?.evaluateJavascript(
+            "(function(){var v=document.querySelector('video');if(v&&v.duration){" +
+                "v.currentTime=Math.max(0,Math.min(v.duration,v.currentTime+($sec)))}})()", null
+        )
     }
 
     private class MenuItem(val ic: Ic, val label: String, val danger: Boolean, val act: () -> Unit)
@@ -620,6 +629,7 @@ class FloatingService : Service() {
         if (speaker.speaking) items.add(MenuItem(Ic.STOP, "Dừng đọc", false) { speaker.stop() })
         items.add(MenuItem(Ic.WAVE, "Đọc tự động", false) { openPanel(0, false) })
         items.add(MenuItem(Ic.VIDEO, "YouTube", false) { openPanel(1, false) })
+        items.add(MenuItem(Ic.SEARCH, "Google", false) { openPanel(2, false) })
         items.add(MenuItem(Ic.SLIDERS, "Cài đặt", false) { openPanel(tab, true) })
         items.add(MenuItem(Ic.CLOSE, "Tắt app nổi", true) { stopSelf() })
 
@@ -717,11 +727,7 @@ class FloatingService : Service() {
         ytEt = null
         sugBox = null
         lineViews.clear()
-        dockBox = null
-        dockPop = null
-        dockPlay = null
-        dockStop = null
-        pickerOpen = false
+        gg?.onPause()
         refreshLaunchers()
         refreshActivity()
         Cloud.autoSave(this)
@@ -729,17 +735,13 @@ class FloatingService : Service() {
 
     private fun onBack() {
         when {
-            dockPop != null -> dismissDockPop()
             customView != null -> hideCustom()
-            pickerOpen -> {
-                pickerOpen = false
-                buildPanel()
-            }
             settingsOpen -> {
                 settingsOpen = false
                 buildPanel()
             }
             tab == 1 && yt?.canGoBack() == true -> yt?.goBack()
+            tab == 2 && gg?.canGoBack() == true -> gg?.goBack()
             else -> hidePanel()
         }
     }
@@ -785,15 +787,10 @@ class FloatingService : Service() {
         settingsSv = null
         ytHolder = null
         sugBox = null
-        dockBox = null
-        dockPop = null
-        dockPlay = null
-        dockStop = null
 
         val look = Look(this, "f")
         curLook = look
         val land = isLand()
-        if (!land) pickerOpen = false
         val textSp = Prefs.int(this, "text_size", 18).toFloat()
         val margin = Ui.dp(this, 10)       // khoảng cách nhỏ từ khung tới rìa màn hình
         val pad = Ui.dp(this, 14)
@@ -821,7 +818,6 @@ class FloatingService : Service() {
         card.clipToOutline = true
         card.outlineProvider = ViewOutlineProvider.BACKGROUND
         Ui.bgImage(this, look)?.let { card.addView(it, FrameLayout.LayoutParams(-1, -1)) }
-        cardView = card
 
         if (land) {
             // Ngang: ngăn kéo ra từ rìa = thanh dọc (tab + ứng dụng) bên trái + hình chữ nhật gần nửa màn hình
@@ -855,10 +851,7 @@ class FloatingService : Service() {
         }
         card.addView(col, FrameLayout.LayoutParams(-1, -1))
 
-        if (land && pickerOpen) {
-            hostYt()
-            buildPicker(col, look)
-        } else {
+        run {
             // Thanh tiêu đề
             val head = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -872,16 +865,15 @@ class FloatingService : Service() {
                 head.addView(Ui.tv(this, look, "Cài đặt", 19f, true),
                     lp(0, -2, 1f).apply { marginStart = Ui.dp(this@FloatingService, 12) })
             } else if (land) {
-                head.addView(Ui.tv(this, look, if (tab == 0) "Đọc tự động" else "YouTube", 19f, true),
+                head.addView(Ui.tv(this, look, when (tab) { 0 -> "Đọc tự động"; 1 -> "YouTube"; else -> "Google" }, 19f, true),
                     lp(0, -2, 1f).apply { marginStart = Ui.dp(this@FloatingService, 4) })
             } else {
-                head.addView(Ui.segment(this, look, listOf(Ic.WAVE to "Đọc", Ic.VIDEO to "YouTube"), tab) {
+                head.addView(Ui.segment(this, look, listOf(Ic.WAVE to "Đọc", Ic.VIDEO to "YouTube", Ic.SEARCH to "Google"), tab) {
                     tab = it
                     Prefs.putI(this, "last_tab", it)
                     buildPanel()
                 }, lp(0, -2, 1f))
             }
-            if (land) addMediaBtns(head, look)
             if (!settingsOpen) {
                 head.addView(Ui.iconBtn(this, look, Ic.SLIDERS) {
                     settingsOpen = true
@@ -908,6 +900,9 @@ class FloatingService : Service() {
             } else if (tab == 0) {
                 hostYt()
                 buildRead(col, look, textSp, land)
+            } else if (tab == 2) {
+                hostYt()
+                buildGoogle(col, look)
             } else {
                 buildYoutube(col, look)
             }
@@ -928,29 +923,7 @@ class FloatingService : Service() {
         panel = root
     }
 
-    // ---------------------------------------------------------------- Thanh dọc (màn ngang): tab + ứng dụng
-
-    private fun dockApps(): List<String> {
-        val raw = Prefs.str(this, "dock_apps")
-        if (raw == null) {
-            // Lần đầu: sẵn Google và TikTok (máy nào có cài thì hiện)
-            return listOf(
-                "com.google.android.googlequicksearchbox",
-                "com.ss.android.ugc.trill",
-                "com.zhiliaoapp.musically"
-            )
-        }
-        return try {
-            val a = JSONArray(raw)
-            (0 until a.length()).map { a.getString(it) }
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun saveDock(l: List<String>) {
-        Prefs.putS(this, "dock_apps", JSONArray(l).toString())
-    }
+    // ---------------------------------------------------------------- Thanh dọc (màn ngang): tab + Phát / Dừng / Tua
 
     private fun dockTab(look: Look, ic: Ic, label: String, on: Boolean, onClick: () -> Unit): LinearLayout {
         val col = if (on) look.onAccent else look.muted
@@ -973,259 +946,144 @@ class FloatingService : Service() {
         return v
     }
 
+    private fun dockAct(
+        look: Look, ic: Ic, label: String, onClick: () -> Unit, onLong: (() -> Unit)? = null
+    ): LinearLayout {
+        val v = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(0, Ui.dp(this@FloatingService, 6), 0, Ui.dp(this@FloatingService, 5))
+            background = RippleDrawable(
+                ColorStateList.valueOf(look.withAlpha(look.text, 18)), Ui.rr(look.tonal, 14), Ui.rr(Color.WHITE, 14)
+            )
+            isClickable = true
+            setOnClickListener { onClick() }
+            if (onLong != null) setOnLongClickListener {
+                onLong()
+                true
+            }
+        }
+        v.addView(Ui.icon(this, ic, look.accent, 20))
+        val t = Ui.tv(this, look, label, 9.5f, true)
+        t.gravity = Gravity.CENTER
+        t.maxLines = 1
+        v.addView(t, lp(-2, -2).apply { topMargin = Ui.dp(this@FloatingService, 2) })
+        return v
+    }
+
     private fun buildDock(look: Look): LinearLayout {
         val dock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
             setPadding(Ui.dp(this@FloatingService, 6), Ui.dp(this@FloatingService, 10),
                 Ui.dp(this@FloatingService, 6), Ui.dp(this@FloatingService, 10))
             background = Ui.glass(this@FloatingService, look, 28)
         }
-        val idle = !settingsOpen && !pickerOpen
-        dock.addView(dockTab(look, Ic.WAVE, "Đọc", idle && tab == 0) {
-            tab = 0
-            Prefs.putI(this, "last_tab", 0)
+        val sv = ScrollView(this)
+        sv.isVerticalScrollBarEnabled = false
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        sv.addView(inner, FrameLayout.LayoutParams(-1, -2))
+        dock.addView(sv, lp(-1, -1))
+
+        val gap = Ui.dp(this, 4)
+        val idle = !settingsOpen
+        fun goTab(t: Int) {
+            tab = t
+            Prefs.putI(this, "last_tab", t)
             settingsOpen = false
-            pickerOpen = false
             buildPanel()
-        }, lp(-1, -2).apply { bottomMargin = Ui.dp(this@FloatingService, 4) })
-        dock.addView(dockTab(look, Ic.VIDEO, "YouTube", idle && tab == 1) {
-            tab = 1
-            Prefs.putI(this, "last_tab", 1)
-            settingsOpen = false
-            pickerOpen = false
-            buildPanel()
-        }, lp(-1, -2))
+        }
+        inner.addView(dockTab(look, Ic.WAVE, "Đọc", idle && tab == 0) { goTab(0) },
+            lp(-1, -2).apply { bottomMargin = gap })
+        inner.addView(dockTab(look, Ic.VIDEO, "YouTube", idle && tab == 1) { goTab(1) },
+            lp(-1, -2).apply { bottomMargin = gap })
+        inner.addView(dockTab(look, Ic.SEARCH, "Google", idle && tab == 2) { goTab(2) }, lp(-1, -2))
 
         val div = View(this)
         div.setBackgroundColor(look.hair)
-        dock.addView(div, lp(-1, Ui.dp(this, 1)).apply {
+        inner.addView(div, lp(-1, Ui.dp(this, 1)).apply {
             topMargin = Ui.dp(this@FloatingService, 8)
             bottomMargin = Ui.dp(this@FloatingService, 8)
             leftMargin = Ui.dp(this@FloatingService, 6)
             rightMargin = Ui.dp(this@FloatingService, 6)
         })
 
-        val plus = Ui.iconBtn(this, look, Ic.PLUS, 42, true) {
-            appCache = null
-            pickerOpen = true
-            settingsOpen = false
-            buildPanel()
-        }
-        (plus.layoutParams as LinearLayout.LayoutParams).bottomMargin = Ui.dp(this, 8)
-        dock.addView(plus)
-
-        val sv = ScrollView(this)
-        sv.isVerticalScrollBarEnabled = false
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-        sv.addView(box, FrameLayout.LayoutParams(-1, -2))
-        dock.addView(sv, lp(-1, 0, 1f))
-        dockBox = box
-        fillDock(look)
+        inner.addView(dockAct(look, Ic.PLAY, "Phát", { mediaPlay() }),
+            lp(-1, -2).apply { bottomMargin = gap })
+        inner.addView(dockAct(look, Ic.STOP, "Dừng", { mediaStop() }),
+            lp(-1, -2).apply { bottomMargin = gap })
+        inner.addView(dockAct(look, Ic.SEEK, "Tua", { mediaSeek(10) }, { mediaSeek(-10) }), lp(-1, -2))
         return dock
     }
 
-    private fun fillDock(look: Look) {
-        val box = dockBox ?: return
-        box.removeAllViews()
-        val pm = packageManager
-        for (pkg in dockApps()) {
-            val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { continue }
-            val label = try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
-            val cell = FrameLayout(this)
-            cell.background = RippleDrawable(
-                ColorStateList.valueOf(look.withAlpha(look.text, 18)), null, Ui.rr(Color.WHITE, 14)
-            )
-            val iv = ImageView(this)
-            iv.setImageDrawable(icon)
-            iv.scaleType = ImageView.ScaleType.FIT_CENTER
-            iv.clipToOutline = true
-            iv.outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(v: View, o: Outline) {
-                    o.setRoundRect(0, 0, v.width, v.height, Ui.dp(this@FloatingService, 10).toFloat())
+    // ---------------------------------------------------------------- Tab Google (mở trong khung, giống YouTube)
+
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+    private fun ensureGg(look: Look): WebView {
+        gg?.let { return it }
+        val w = WebView(this)
+        w.setBackgroundColor(look.base)
+        val s = w.settings
+        s.javaScriptEnabled = true
+        s.domStorageEnabled = true
+        s.loadWithOverviewMode = true
+        s.useWideViewPort = true
+        s.userAgentString = s.userAgentString.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+ "), "")
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(true)
+        cm.setAcceptThirdPartyCookies(w, true)
+        w.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val u = request?.url?.toString() ?: return true
+                return !(u.startsWith("http://") || u.startsWith("https://"))
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                ggBack?.alpha = if (view?.canGoBack() == true) 1f else 0.35f
+            }
+        }
+        w.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, p: Int) {
+                ggProgress?.let {
+                    it.set(p / 100f)
+                    it.visibility = if (p >= 100) View.GONE else View.VISIBLE
                 }
             }
-            cell.addView(iv, FrameLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40), Gravity.CENTER))
-            cell.isClickable = true
-            cell.setOnClickListener { launchApp(pkg) }
-            cell.setOnLongClickListener {
-                showDockPop(cell, pkg, label)
-                true
-            }
-            box.addView(cell, lp(Ui.dp(this, 50), Ui.dp(this, 50)).apply {
-                bottomMargin = Ui.dp(this@FloatingService, 6)
-            })
         }
-    }
-
-    private fun freeformOn(): Boolean {
-        if (packageManager.hasSystemFeature(PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT)) return true
-        return try {
-            Settings.Global.getInt(contentResolver, "enable_freeform_support", 0) == 1
-        } catch (_: Exception) {
+        w.setOnTouchListener { _, e ->
+            if (e.action == MotionEvent.ACTION_DOWN) ggEt?.let { hideKeyboard(it) }
             false
         }
+        w.loadUrl(GHOME)
+        gg = w
+        return w
     }
 
-    /** Tùy chọn mở ứng dụng dạng cửa sổ nhỏ (freeform) đúng vùng [r]. */
-    private fun miniOptions(r: Rect): Bundle? = try {
-        val o = ActivityOptions.makeBasic()
-        o.setLaunchBounds(r)
-        try {
-            ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType).invoke(o, 5)
-        } catch (_: Throwable) {
-        }
-        o.toBundle()
-    } catch (_: Throwable) {
-        null
-    }
+    private fun buildGoogle(col: LinearLayout, look: Look) {
+        val w = ensureGg(look)
+        detach(w)
 
-    /**
-     * Mở ứng dụng: ở màn ngang thì cố mở dạng cửa sổ mini ngay vị trí hình chữ nhật (cần máy bật cửa sổ tự do),
-     * không được thì mở toàn màn hình như bình thường. Khung tự thu lại về thanh vuốt.
-     */
-    private fun launchApp(pkg: String) {
-        val intent = packageManager.getLaunchIntentForPackage(pkg)
-        if (intent == null) {
-            Toast.makeText(this, "Không mở được ứng dụng này", Toast.LENGTH_SHORT).show()
-            return
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-        var rect: Rect? = null
-        val c = cardView
-        if (isLand() && c != null && c.width > 0 && c.height > 0) {
-            val a = IntArray(2)
-            c.getLocationOnScreen(a)
-            rect = Rect(a[0], a[1], a[0] + c.width, a[1] + c.height)
-        }
-        val free = freeformOn()
-        val opts = if (rect != null && free) miniOptions(rect) else null
-        hidePanel()
-        try {
-            if (opts != null) startActivity(intent, opts) else startActivity(intent)
-        } catch (_: Exception) {
-            try {
-                startActivity(intent)
-            } catch (_: Exception) {
-                Toast.makeText(this, "Không mở được ứng dụng này", Toast.LENGTH_SHORT).show()
-            }
-        }
-        if (rect != null && !free && !hintedFreeform) {
-            hintedFreeform = true
-            Toast.makeText(
-                this,
-                "Máy chưa bật cửa sổ tự do nên ứng dụng mở toàn màn hình. Bật trong Tùy chọn nhà phát triển: " +
-                    "“Bật cửa sổ dạng tự do” và “Buộc các hoạt động có thể thay đổi kích thước”.",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    private fun dismissDockPop() {
-        dockPop?.let { detach(it) }
-        dockPop = null
-    }
-
-    /** Nhấn giữ 1 ứng dụng trên thanh: hiện nút gỡ khỏi thanh. */
-    private fun showDockPop(anchor: View, pkg: String, label: String) {
-        val pn = panel ?: return
-        val look = curLook ?: return
-        dismissDockPop()
-        val catcher = FrameLayout(this)
-        catcher.isClickable = true
-        catcher.setOnClickListener { dismissDockPop() }
-        val pop = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(this@FloatingService, 12), Ui.dp(this@FloatingService, 10),
-                Ui.dp(this@FloatingService, 12), Ui.dp(this@FloatingService, 10))
-            background = Ui.rr(look.glassAt(98), 16, look.hair)
-            elevation = Ui.dp(this@FloatingService, 8).toFloat()
-            isClickable = true
-        }
-        val t = Ui.tv(this, look, label, 14f, true)
-        t.maxLines = 1
-        t.ellipsize = TextUtils.TruncateAt.END
-        pop.addView(t)
-        pop.addView(Ui.gap(this, 8))
-        pop.addView(Ui.btn(this, look, "Gỡ khỏi thanh", false, Ic.TRASH, true) {
-            saveDock(dockApps().filter { it != pkg })
-            dismissDockPop()
-            fillDock(look)
-        })
-        val w = Ui.dp(this, 190)
-        val a = IntArray(2)
-        anchor.getLocationOnScreen(a)
-        val r = IntArray(2)
-        pn.getLocationOnScreen(r)
-        val ax = a[0] - r[0] - pn.paddingLeft
-        val ay = a[1] - r[1] - pn.paddingTop
-        val x = ax + anchor.width + Ui.dp(this, 8)
-        val maxY = maxOf(0, pn.height - pn.paddingTop - pn.paddingBottom - Ui.dp(this, 110))
-        catcher.addView(pop, FrameLayout.LayoutParams(w, -2).apply {
-            leftMargin = x.coerceAtLeast(0)
-            topMargin = ay.coerceIn(0, maxY)
-        })
-        pn.addView(catcher, FrameLayout.LayoutParams(-1, -1))
-        dockPop = catcher
-    }
-
-    private fun loadApps(done: (List<AppEntry>) -> Unit) {
-        appCache?.let {
-            done(it)
-            return
-        }
-        Thread {
-            val pm = packageManager
-            val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-            val out = ArrayList<AppEntry>()
-            val seen = HashSet<String>()
-            try {
-                for (ri in pm.queryIntentActivities(q, 0)) {
-                    val pkg = ri.activityInfo?.packageName ?: continue
-                    if (pkg == packageName || !seen.add(pkg)) continue
-                    val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { pkg }
-                    val icon = try { ri.loadIcon(pm) } catch (_: Exception) { continue }
-                    out.add(AppEntry(pkg, label, icon))
-                }
-            } catch (_: Exception) {
-            }
-            out.sortBy { it.label.lowercase() }
-            ui.post {
-                appCache = out
-                done(out)
-            }
-        }.start()
-    }
-
-    /** Màn chọn ứng dụng để thêm vào thanh dọc (hiện trong hình chữ nhật). */
-    private fun buildPicker(col: LinearLayout, look: Look) {
-        val head = LinearLayout(this).apply {
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        head.addView(Ui.iconBtn(this, look, Ic.BACK) {
-            pickerOpen = false
-            buildPanel()
-        })
-        head.addView(Ui.tv(this, look, "Thêm ứng dụng", 19f, true),
-            lp(0, -2, 1f).apply { marginStart = Ui.dp(this@FloatingService, 12) })
-        head.addView(Ui.iconBtn(this, look, Ic.DOWN) { hidePanel() },
-            lp(-2, -2).apply { marginStart = Ui.dp(this@FloatingService, 8) })
-        col.addView(head)
-        col.addView(Ui.gap(this, 10))
+        val back = Ui.iconBtn(this, look, Ic.BACK, 42) { if (gg?.canGoBack() == true) gg?.goBack() }
+        back.alpha = if (w.canGoBack()) 1f else 0.35f
+        ggBack = back
+        row.addView(back)
 
         val field = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(Ui.dp(this@FloatingService, 14), 0, Ui.dp(this@FloatingService, 10), 0)
+            setPadding(Ui.dp(this@FloatingService, 14), 0, Ui.dp(this@FloatingService, 6), 0)
             background = Ui.rr(look.tonal, 21)
         }
         field.addView(Ui.icon(this, Ic.SEARCH, look.muted, 18))
         val et = EditText(this).apply {
-            hint = "Tìm ứng dụng"
+            hint = "Tìm kiếm trên Google"
+            setText(ggQuery)
             setTextColor(look.text)
             setHintTextColor(look.muted)
             textSize = 15f
@@ -1233,82 +1091,72 @@ class FloatingService : Service() {
             background = null
             inputType = InputType.TYPE_CLASS_TEXT
             imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            setPadding(Ui.dp(this@FloatingService, 10), 0, 0, 0)
+            setPadding(Ui.dp(this@FloatingService, 10), 0, Ui.dp(this@FloatingService, 6), 0)
         }
+        ggEt = et
         field.addView(et, lp(0, Ui.dp(this, 42), 1f))
-        col.addView(field, lp(-1, Ui.dp(this, 42)))
-        col.addView(Ui.gap(this, 8))
-
-        val sv = ScrollView(this)
-        sv.isVerticalScrollBarEnabled = false
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        sv.addView(box, FrameLayout.LayoutParams(-1, -2))
-        col.addView(sv, lp(-1, 0, 1f))
-        box.addView(Ui.tv(this, look, "Đang tải danh sách ứng dụng…", 14f, false, true))
-
-        var all: List<AppEntry> = emptyList()
-        var loaded = false
-        fun fill() {
-            box.removeAllViews()
-            val key = et.text.toString().trim().lowercase()
-            val added = dockApps().toSet()
-            val shown = all.filter { key.isEmpty() || it.label.lowercase().contains(key) }
-            if (shown.isEmpty()) {
-                box.addView(Ui.tv(this, look, "Không có ứng dụng nào.", 14f, false, true))
-                return
-            }
-            for (e in shown) {
-                val on = e.pkg in added
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(Ui.dp(this@FloatingService, 6), Ui.dp(this@FloatingService, 8),
-                        Ui.dp(this@FloatingService, 10), Ui.dp(this@FloatingService, 8))
-                    background = RippleDrawable(
-                        ColorStateList.valueOf(look.withAlpha(look.text, 14)), null, Ui.rr(Color.WHITE, 14)
-                    )
-                    isClickable = true
-                }
-                val iv = ImageView(this)
-                iv.setImageDrawable(e.icon)
-                row.addView(iv, lp(Ui.dp(this, 40), Ui.dp(this, 40)))
-                val t = Ui.tv(this, look, e.label, 15f)
-                t.maxLines = 1
-                t.ellipsize = TextUtils.TruncateAt.END
-                row.addView(t, lp(0, -2, 1f).apply {
-                    marginStart = Ui.dp(this@FloatingService, 14)
-                    marginEnd = Ui.dp(this@FloatingService, 8)
-                })
-                val mark = Ui.icon(this, if (on) Ic.CHECK else Ic.PLUS, if (on) look.accent else look.muted, 20)
-                row.addView(mark)
-                row.setOnClickListener {
-                    val cur = dockApps().toMutableList()
-                    if (cur.contains(e.pkg)) {
-                        cur.remove(e.pkg)
-                        mark.set(Ic.PLUS, look.muted)
-                    } else {
-                        cur.add(e.pkg)
-                        mark.set(Ic.CHECK, look.accent)
-                    }
-                    saveDock(cur)
-                    fillDock(look)
-                }
-                box.addView(row, lp(-1, -2))
-            }
+        val clear = Ui.icon(this, Ic.CLOSE, look.muted, 18)
+        clear.setPadding(Ui.dp(this, 3), Ui.dp(this, 3), Ui.dp(this, 3), Ui.dp(this, 3))
+        clear.visibility = if (ggQuery.isEmpty()) View.GONE else View.VISIBLE
+        clear.setOnClickListener {
+            et.setText("")
+            et.requestFocus()
         }
+        field.addView(clear)
         et.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                if (loaded) fill()
+                ggQuery = s?.toString() ?: ""
+                clear.visibility = if (ggQuery.isEmpty()) View.GONE else View.VISIBLE
             }
         })
-        loadApps { list ->
-            if (!pickerOpen) return@loadApps
-            all = list
-            loaded = true
-            fill()
+        et.setOnEditorActionListener { v, id, ev ->
+            if (id == EditorInfo.IME_ACTION_SEARCH ||
+                (ev != null && ev.keyCode == KeyEvent.KEYCODE_ENTER && ev.action == KeyEvent.ACTION_DOWN)
+            ) {
+                hideKeyboard(v)
+                ggSearch(v.text.toString())
+                true
+            } else false
         }
+        row.addView(field, lp(0, Ui.dp(this, 42), 1f).apply {
+            marginStart = Ui.dp(this@FloatingService, 8)
+            marginEnd = Ui.dp(this@FloatingService, 8)
+        })
+        row.addView(Ui.iconBtn(this, look, Ic.HOME, 42) {
+            ggQuery = ""
+            et.setText("")
+            hideKeyboard(et)
+            gg?.loadUrl(GHOME)
+        })
+        col.addView(row)
+        col.addView(Ui.gap(this, 10))
+
+        val holder = FrameLayout(this)
+        holder.clipToOutline = true
+        holder.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(v: View, o: Outline) {
+                o.setRoundRect(0, 0, v.width, v.height, Ui.dp(this@FloatingService, 18).toFloat())
+            }
+        }
+        holder.addView(w, FrameLayout.LayoutParams(-1, -1))
+        val pg = ProgressLine(this, 0, look.accent)
+        pg.visibility = View.GONE
+        ggProgress = pg
+        holder.addView(pg, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        col.addView(holder, lp(-1, 0, 1f))
+        w.onResume()
+    }
+
+    private fun ggSearch(q: String) {
+        val s = q.trim()
+        if (s.isEmpty()) return
+        val w = gg ?: return
+        val url = if (s.startsWith("http://") || s.startsWith("https://")) s
+        else "https://www.google.com/search?hl=vi&q=" + URLEncoder.encode(s, "UTF-8")
+        ggQuery = s
+        w.loadUrl(url)
     }
 
     // ---------------------------------------------------------------- Tab đọc tự động
