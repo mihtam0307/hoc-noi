@@ -69,13 +69,13 @@ class FloatingService : Service() {
         private const val POLL_JS =
             "(function(){var v=document.querySelector('video');if(!v||!v.duration)return '';" +
             "var t=document.title.replace(/ - YouTube\$/,'');" +
-            "return JSON.stringify({p:!v.paused&&!v.ended,t:v.currentTime,d:v.duration,n:t});})()"
+            "return JSON.stringify({p:!v.paused&&!v.ended,e:v.ended?1:0,w:window.__hnWant?1:0,t:v.currentTime,d:v.duration,n:t});})()"
         private const val TOGGLE_JS =
-            "(function(){var v=document.querySelector('video');if(v){if(v.paused){v.play()}else{v.pause()}}})()"
+            "(function(){var v=document.querySelector('video');if(v){if(v.paused){window.__hnWant=1;v.play()}else{window.__hnWant=0;v.pause()}}})()"
         private const val PAUSE_JS =
-            "(function(){var v=document.querySelector('video');if(v&&!v.paused)v.pause()})()"
+            "(function(){window.__hnWant=0;var v=document.querySelector('video');if(v&&!v.paused)v.pause()})()"
         private const val PLAY_JS =
-            "(function(){var v=document.querySelector('video');if(v&&v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}})()"
+            "(function(){var v=document.querySelector('video');if(v){window.__hnWant=1;if(v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}}})()"
         /** Chặn trang biết mình đang bị ẩn (Page Visibility) để YouTube không tự dừng khi thu nhỏ / phóng to khung. */
         private const val KEEP_JS =
             "(function(){try{if(window.__hnKeep)return;window.__hnKeep=1;" +
@@ -85,6 +85,15 @@ class FloatingService : Service() {
             "var s=function(e){e.stopImmediatePropagation()};" +
             "window.addEventListener('visibilitychange',s,true);document.addEventListener('visibilitychange',s,true);" +
             "window.addEventListener('webkitvisibilitychange',s,true);document.addEventListener('webkitvisibilitychange',s,true);" +
+            "var tc=function(){window.__hnTouch=Date.now()};" +
+            "document.addEventListener('touchstart',tc,true);document.addEventListener('pointerdown',tc,true);document.addEventListener('keydown',tc,true);" +
+            "var rs=[];" +
+            "document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO')window.__hnWant=1},true);" +
+            "document.addEventListener('pause',function(e){var v=e.target;if(!v||v.tagName!=='VIDEO'||v.ended||!window.__hnWant)return;" +
+            "if(Date.now()-(window.__hnTouch||0)<1500){window.__hnWant=0;return}" +
+            "var pn=location.pathname;if(pn.indexOf('/watch')!==0&&pn.indexOf('/shorts')!==0)return;" +
+            "var n=Date.now();rs=rs.filter(function(x){return n-x<10000});if(rs.length>=8)return;rs.push(n);" +
+            "setTimeout(function(){if(window.__hnWant&&v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}},150)},true);" +
             "}catch(e){}})()"
     }
 
@@ -106,10 +115,6 @@ class FloatingService : Service() {
     private var handle: LinearLayout? = null
     private var handlePill: View? = null
     private var handleLp: WindowManager.LayoutParams? = null
-    private var hPlay: FrameLayout? = null
-    private var hStop: FrameLayout? = null
-    private var hSeek: FrameLayout? = null
-    private var hSig = -1
     private var slideIn = false
 
 
@@ -399,20 +404,6 @@ class FloatingService : Service() {
         if (land || open) dismissMenu()
     }
 
-    private fun handleBtn(ic: Ic, onClick: () -> Unit, onLong: (() -> Unit)? = null): FrameLayout {
-        val f = FrameLayout(this)
-        f.background = Ui.rr(0xE61B1F2E.toInt(), 14, 0x33FFFFFF, 1)
-        val iv = IconView(this, ic, Color.WHITE)
-        f.addView(iv, FrameLayout.LayoutParams(Ui.dp(this, 14), Ui.dp(this, 14), Gravity.CENTER))
-        f.isClickable = true
-        f.setOnClickListener { onClick() }
-        if (onLong != null) f.setOnLongClickListener {
-            onLong()
-            true
-        }
-        return f
-    }
-
     @SuppressLint("ClickableViewAccessibility")
     private fun showHandle() {
         val root = LinearLayout(this)
@@ -424,19 +415,6 @@ class FloatingService : Service() {
             bottomMargin = Ui.dp(this@FloatingService, 12)
         })
         handlePill = pill
-        val play = handleBtn(Ic.PLAY, { mediaPlay() })
-        val stop = handleBtn(Ic.STOP, { mediaStop() })
-        val seek = handleBtn(Ic.SEEK, { mediaSeek(10) }, { mediaSeek(-10) })
-        for (b in listOf(play, stop, seek)) {
-            b.visibility = View.GONE
-            root.addView(b, LinearLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28)).apply {
-                bottomMargin = Ui.dp(this@FloatingService, 6)
-            })
-        }
-        hPlay = play
-        hStop = stop
-        hSeek = seek
-
         val wlp = WindowManager.LayoutParams(
             Ui.dp(this, 30), Ui.dp(this, 60), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
@@ -493,7 +471,7 @@ class FloatingService : Service() {
             }
         }
         wm.addView(root, wlp)
-        refreshHandle()
+        applyHandle()
     }
 
     private fun saveHandleY() {
@@ -523,25 +501,6 @@ class FloatingService : Service() {
         try { wm.updateViewLayout(root, wlp) } catch (_: Exception) {}
     }
 
-    /** Thanh vuốt hiện thêm Phát / Dừng / Tua khi đang có video, hoặc Dừng khi đang đọc. */
-    private fun refreshHandle() {
-        val play = hPlay ?: return
-        val stop = hStop ?: return
-        val seek = hSeek ?: return
-        val wlp = handleLp ?: return
-        val sig = (if (ytHas) 1 else 0) or (if (speaker.speaking) 2 else 0)
-        if (sig == hSig) return
-        hSig = sig
-        val vid = ytHas
-        val any = ytHas || speaker.speaking
-        play.visibility = if (vid) View.VISIBLE else View.GONE
-        seek.visibility = if (vid) View.VISIBLE else View.GONE
-        stop.visibility = if (any) View.VISIBLE else View.GONE
-        val n = (if (vid) 2 else 0) + (if (any) 1 else 0)
-        wlp.height = Ui.dp(this, 60 + 34 * n)
-        applyHandle()
-    }
-
     private fun openFromHandle() {
         if (panel != null) return
         slideIn = true
@@ -560,7 +519,6 @@ class FloatingService : Service() {
     private fun refreshActivity() {
         val active = panel == null && ((ytHas && ytPlaying) || speaker.speaking)
         eq?.setActive(active)
-        refreshHandle()
     }
 
     // ---- Phát / Dừng / Tua: dùng chung cho thanh vuốt (khi thu lại) và thanh dọc (khi mở)
@@ -573,6 +531,7 @@ class FloatingService : Service() {
         yt?.evaluateJavascript(PLAY_JS, null)
         ytPlaying = true
         ytWant = true
+        ytMoveAt = SystemClock.uptimeMillis()
         refreshActivity()
     }
 
@@ -1648,8 +1607,9 @@ class FloatingService : Service() {
                     if (o.optBoolean("p")) {
                         ytPlaying = true
                         ytWant = true
-                    } else if (ytWant && SystemClock.uptimeMillis() - ytMoveAt < 3000) {
-                        // vừa đổi cửa sổ nên bị tạm dừng: không tính là người dùng dừng, phát lại ngay
+                    } else if (ytWant && o.optInt("e", 0) == 0 &&
+                        (o.optInt("w", 0) == 1 || SystemClock.uptimeMillis() - ytMoveAt < 3000)) {
+                        // bị tạm dừng không do người dùng (đổi cửa sổ, app khác chiếm âm thanh...): phát lại ngay
                         ytPlaying = true
                         yt?.evaluateJavascript(PLAY_JS, null)
                     } else {

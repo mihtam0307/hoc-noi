@@ -29,6 +29,7 @@ App mở lên sẽ hỏi GitHub bản mới nhất, thấy số lớn hơn thì 
 ## 4. Màn hình ngang (v3)
 - Ngang: không còn hình nổi, thay bằng **thanh vuốt nhỏ ở rìa** (mặc định cạnh trái, đổi trong Tùy chỉnh > Thanh vuốt). Vuốt vào hoặc chạm để mở; kéo dọc để dời thanh lên/xuống.
 - Mở ra là **hình chữ nhật gần nửa màn hình** và **thanh dọc** bên trái nó: 3 tab **Đọc / YouTube / Google** và 3 nút **Phát / Dừng / Tua** (Tua: chạm = tới 10 giây, nhấn giữ = lùi 10 giây). Chạm ra ngoài hoặc nút mũi tên xuống để thu lại.
-- Khi khung thu lại, thanh vuốt hiện thêm Phát / Dừng / Tua (có video) hoặc Dừng (đang đọc).
+- Khi khung thu lại, thanh vuốt chỉ còn thanh nhỏ, **không còn nút Phát / Dừng / Tua ở ngoài**; muốn điều khiển thì vuốt mở khung rồi dùng thanh dọc bên trong.
 - Tab **Google** mở trang google.com ngay trong khung, giống tab YouTube (dọc cũng có).
-- YouTube đã bấm phát thì giữ phát khi thu nhỏ / phóng to / xoay; chỉ dừng khi bấm Dừng.
+- YouTube đã bấm phát thì giữ phát khi thu nhỏ / phóng to / xoay; chỉ dừng khi bấm Dừng (hoặc tự chạm tạm dừng trong video).
+- Nếu video bị dừng không do người dùng (vào app khác, app khác chiếm âm thanh...), app tự phát lại ngay thay vì dừng hẳn.
