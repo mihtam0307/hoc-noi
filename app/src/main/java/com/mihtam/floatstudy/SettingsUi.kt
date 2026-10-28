@@ -55,6 +55,11 @@ object SettingsUi {
                 Ui.btn(c, look, "Đổi hình", false, Ic.IMAGE) { pick("bubble_img") },
                 Ui.btn(c, look, "Mặc định", false, Ic.BACK) { clear(c, "bubble_img"); onChanged() }), 18)
 
+            title("THANH VUỐT (MÀN HÌNH NGANG)")
+            add(Ui.chips(c, look, listOf("Cạnh trái", "Cạnh phải"), Prefs.int(c, "handle_side", 0).coerceIn(0, 1)) {
+                Prefs.putI(c, "handle_side", it); onChanged()
+            }, 18)
+
             title("CHỮ & GIỌNG ĐỌC")
             add(Ui.slider(c, look, "Cỡ chữ", 14, 32, Prefs.int(c, "text_size", 18), { "${it}sp" }) {
                 Prefs.putI(c, "text_size", it); onChanged()

@@ -97,13 +97,13 @@ object Ui {
     /** Nút bấm dạng viên: strong = nền màu nhấn; ic = icon tự vẽ phía trước chữ. */
     fun btn(
         c: Context, look: Look, s: String, strong: Boolean = false, ic: Ic? = null,
-        onClick: () -> Unit
+        compact: Boolean = false, onClick: () -> Unit
     ): LinearLayout {
         val col = if (strong) look.onAccent else look.text
         val b = LinearLayout(c)
         b.orientation = LinearLayout.HORIZONTAL
         b.gravity = Gravity.CENTER
-        b.setPadding(dp(c, 16), dp(c, 12), dp(c, 16), dp(c, 12))
+        b.setPadding(dp(c, if (compact) 10 else 16), dp(c, if (compact) 10 else 12), dp(c, if (compact) 10 else 16), dp(c, if (compact) 10 else 12))
         b.background = ripple(look, rr(if (strong) look.accent else look.tonal, 14), 14)
         if (ic != null) {
             val i = icon(c, ic, col, 18)

@@ -27,6 +27,8 @@ App mở lên sẽ hỏi GitHub bản mới nhất, thấy số lớn hơn thì 
 - Khung phủ kín màn hình, cách rìa 10dp, tự theo hướng xoay (cửa sổ MATCH_PARENT + đệm theo vùng an toàn); WebView được giữ nguyên khi xoay nên video không bị ngắt.
 
 ## 4. Màn hình ngang (v3)
-- Xoay ngang: hình nổi tròn ẩn đi, thay bằng **thanh nhỏ ở mép trái** (kéo lên/xuống để dời chỗ). Vuốt thanh sang phải (hoặc chạm) để mở khung.
-- Khung chiếm khoảng **nửa màn hình** (tab Đọc / YouTube giữ nguyên). Chạm vùng trống bên ngoài khung để đóng.
-- Xoay dọc thì quay lại hình nổi tròn như cũ.
+- Ngang: không còn hình nổi, thay bằng **thanh vuốt nhỏ ở rìa** (mặc định cạnh trái, đổi trong Tùy chỉnh > Thanh vuốt). Vuốt vào hoặc chạm để mở; kéo dọc để dời thanh lên/xuống.
+- Mở ra là **hình chữ nhật gần nửa màn hình** (Đọc / YouTube / Cài đặt) và **thanh dọc** bên trái nó: tab Đọc, YouTube, dấu **+** để thêm ứng dụng, rồi các ứng dụng đã thêm (sẵn Google, TikTok nếu máy có). Nhấn ứng dụng để mở như bình thường, nhấn giữ để gỡ khỏi thanh. Chạm ra ngoài hoặc nút mũi tên xuống để thu lại.
+- Có nút **phát / tạm dừng video** và **dừng đọc**: trên thanh vuốt (khi đang thu lại) và trên tiêu đề khung (khi đang mở).
+- YouTube đã bấm phát thì giữ phát khi thu nhỏ / phóng to / xoay; chỉ dừng khi bấm dừng.
+- Cần khai báo `<queries>` LAUNCHER trong Manifest để liệt kê ứng dụng cài trên máy (đã thêm).
