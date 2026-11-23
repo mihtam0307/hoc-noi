@@ -14,7 +14,7 @@ import android.widget.FrameLayout
 /** Bộ icon tự vẽ bằng nét vector (lưới 24x24), không dùng icon hay emoji có sẵn của hệ thống. */
 enum class Ic {
     PLAY, PAUSE, STOP, SEARCH, SLIDERS, DOWN, BACK, FORWARD, CLOSE, IMAGE, UPLOAD, DOWNLOAD,
-    TRASH, BOOK, VIDEO, REPEAT, HOME, EXPAND, CHECK, USER, FLOAT, WAVE, PLUS, SEEK, LIST
+    TRASH, BOOK, VIDEO, REPEAT, HOME, EXPAND, CHECK, USER, FLOAT, WAVE, PLUS, SEEK, LIST, NEXT, NOTE
 }
 
 class IconView(c: Context, var ic: Ic, var color: Int) : View(c) {
@@ -198,6 +198,19 @@ class IconView(c: Context, var ic: Ic, var color: Int) : View(c) {
                 cv.drawCircle(5f, 12f, 1.3f, p)
                 cv.drawCircle(5f, 17f, 1.3f, p)
                 p.style = Paint.Style.STROKE
+            }
+            Ic.NEXT -> {
+                p.style = Paint.Style.FILL_AND_STROKE
+                p.strokeWidth = 1.2f
+                poly(cv, true, 5.5f, 6.5f, 15f, 12f, 5.5f, 17.5f)
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 2f
+                cv.drawLine(18.5f, 6.5f, 18.5f, 17.5f, p)
+            }
+            Ic.NOTE -> {
+                cv.drawCircle(8f, 17f, 3f, p)
+                cv.drawLine(11f, 17f, 11f, 5f, p)
+                poly(cv, false, 11f, 5f, 18f, 7f, 18f, 11f)
             }
             Ic.PLUS -> {
                 cv.drawLine(12f, 5f, 12f, 19f, p)

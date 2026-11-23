@@ -76,6 +76,26 @@ class FloatingService : Service() {
             "(function(){window.__hnWant=0;var v=document.querySelector('video');if(v&&!v.paused)v.pause()})()"
         private const val PLAY_JS =
             "(function(){var v=document.querySelector('video');if(v){window.__hnWant=1;if(v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}}})()"
+        /** Đánh dấu "vừa đổi cửa sổ": chỉ trong 2,5 giây này trang mới được phát lại (tối đa 3 lần). */
+        private const val MOVE_JS =
+            "(function(){window.__hnMoveUntil=Date.now()+2500;window.__hnTries=0})()"
+        /** Video bị dừng không do mình: bỏ ý định "đang phát" ở trang để không phát lại giành âm thanh với app khác. */
+        private const val WANT_OFF_JS = "window.__hnWant=0"
+        private const val TK_HOME = "https://www.tiktok.com/?lang=vi-VN"
+        /** Chọn video TikTok đang phát, hoặc video đang hiện trên màn hình (trang có nhiều video xếp dọc). */
+        private const val TK_PICK =
+            "var vs=[].slice.call(document.querySelectorAll('video'));" +
+            "var v=vs.filter(function(x){return !x.paused})[0]||" +
+            "vs.filter(function(x){var r=x.getBoundingClientRect();return r.bottom>0&&r.top<window.innerHeight})[0]||vs[0];"
+        private const val TK_PLAY_JS =
+            "(function(){" + TK_PICK + "if(v&&v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){})}})()"
+        private const val TK_PAUSE_JS =
+            "(function(){[].slice.call(document.querySelectorAll('video')).forEach(function(x){if(!x.paused)x.pause()})})()"
+        private const val YT_NEXT_JS =
+            "(function(){var b=document.querySelector('.ytp-next-button');if(b){b.click();return 1}return 0})()"
+        private const val TK_NEXT_JS =
+            "(function(){var b=document.querySelector(\"[data-e2e='arrow-right']\");if(b){b.click();return 1}" +
+            "if(document.querySelector('video')){window.scrollBy(0,window.innerHeight);return 1}return 0})()"
         /** Chặn trang biết mình đang bị ẩn (Page Visibility) để YouTube không tự dừng khi thu nhỏ / phóng to khung. */
         private const val KEEP_JS =
             "(function(){try{if(window.__hnKeep)return;window.__hnKeep=1;" +
@@ -87,13 +107,15 @@ class FloatingService : Service() {
             "window.addEventListener('webkitvisibilitychange',s,true);document.addEventListener('webkitvisibilitychange',s,true);" +
             "var tc=function(){window.__hnTouch=Date.now()};" +
             "document.addEventListener('touchstart',tc,true);document.addEventListener('pointerdown',tc,true);document.addEventListener('keydown',tc,true);" +
-            "var rs=[];" +
             "document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO')window.__hnWant=1},true);" +
+            // Chỉ phát lại khi video bị dừng NGAY SAU KHI khung đổi cửa sổ (tối đa 3 lần trong 2,5 giây).
+            // Dừng ở thời điểm khác (app khác / hệ thống chiếm âm thanh, người dùng chạm) thì tôn trọng, KHÔNG phát lại.
             "document.addEventListener('pause',function(e){var v=e.target;if(!v||v.tagName!=='VIDEO'||v.ended||!window.__hnWant)return;" +
             "if(Date.now()-(window.__hnTouch||0)<1500){window.__hnWant=0;return}" +
             "var pn=location.pathname;if(pn.indexOf('/watch')!==0&&pn.indexOf('/shorts')!==0)return;" +
-            "var n=Date.now();rs=rs.filter(function(x){return n-x<10000});if(rs.length>=8)return;rs.push(n);" +
-            "setTimeout(function(){if(window.__hnWant&&v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}},150)},true);" +
+            "if(Date.now()>(window.__hnMoveUntil||0)||(window.__hnTries||0)>=3){window.__hnWant=0;return}" +
+            "window.__hnTries=(window.__hnTries||0)+1;" +
+            "setTimeout(function(){if(window.__hnWant&&v.paused&&!v.ended){var p=v.play();if(p&&p.catch)p.catch(function(){})}},200)},true);" +
             "}catch(e){}})()"
     }
 
@@ -168,6 +190,18 @@ class FloatingService : Service() {
     private var ggProgress: ProgressLine? = null
     private var ggQuery = ""
 
+    // TikTok
+    private var tk: WebView? = null
+    private var tkEt: EditText? = null
+    private var tkBack: IconBtn? = null
+    private var tkProgress: ProgressLine? = null
+    private var tkQuery = ""
+
+    // Thanh mini (màn dọc): thay cho hình nổi khi chọn "Thanh mini" trong Cài đặt
+    private var mini: LinearLayout? = null
+    private var miniLp: WindowManager.LayoutParams? = null
+    private var miniPlay: IconBtn? = null
+
     private val pollRun = object : Runnable {
         override fun run() {
             pollYt()
@@ -178,7 +212,12 @@ class FloatingService : Service() {
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         val k = key ?: return@OnSharedPreferenceChangeListener
         ui.post {
-            if (k.startsWith("bubble_")) applyBubble()
+            if (k.startsWith("bubble_")) {
+                applyBubble()
+                applyMini()
+            }
+            if (k == "mini_mode") refreshLaunchers()
+            if (k.startsWith("f_")) rebuildMini()
             if (k == "handle_side") {
                 applyHandle()
                 if (panel != null) buildPanel()
@@ -188,7 +227,7 @@ class FloatingService : Service() {
                 lines = parse(inputText)
             }
             if (panel == null && k == "repeat") repeatIdx = Prefs.int(this, "repeat", 0).coerceIn(0, 5)
-            if (panel != null && (k.startsWith("f_") || k == "text_size" || k == "speed")) buildPanel()
+            if (panel != null && (k.startsWith("f_") || k == "text_size" || k == "speed" || k.startsWith("margin_"))) buildPanel()
         }
     }
 
@@ -201,7 +240,7 @@ class FloatingService : Service() {
         inputText = Prefs.str(this, "content") ?: ""
         lines = parse(inputText)
         repeatIdx = Prefs.int(this, "repeat", 0).coerceIn(0, 5)
-        tab = Prefs.int(this, "last_tab", 0).coerceIn(0, 2)
+        tab = Prefs.int(this, "last_tab", 0).coerceIn(0, 3)
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         speaker = Speaker(this)
         speaker.onLine = { i, p -> curLine = i; pass = p; refreshStatus(); highlight(); refreshActivity() }
@@ -217,6 +256,7 @@ class FloatingService : Service() {
         }
         showBubble()
         showHandle()
+        showMiniBar()
         refreshLaunchers()
         Prefs.sp(this).registerOnSharedPreferenceChangeListener(prefListener)
     }
@@ -235,6 +275,7 @@ class FloatingService : Service() {
         ui.postDelayed({
             dismissMenu()
             clampBubble()
+            clampMini()
             applyHandle()
             refreshLaunchers()
             if (panel != null) buildPanel()
@@ -258,6 +299,12 @@ class FloatingService : Service() {
             try { it.destroy() } catch (_: Exception) {}
         }
         gg = null
+        tk?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            try { it.destroy() } catch (_: Exception) {}
+        }
+        tk = null
+        mini?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         host?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         menu?.let { try { wm.removeView(it) } catch (_: Exception) {} }
@@ -401,7 +448,9 @@ class FloatingService : Service() {
     private fun refreshLaunchers() {
         val land = isLand()
         val open = panel != null
-        setShown(bubble, bubbleLp, !open && !land)
+        val miniMode = Prefs.int(this, "mini_mode", 0).coerceIn(0, 1) == 1
+        setShown(bubble, bubbleLp, !open && !land && !miniMode)
+        setShown(mini, miniLp, !open && !land && miniMode)
         setShown(handle, handleLp, !open && land)
         if (land || open) dismissMenu()
     }
@@ -521,11 +570,19 @@ class FloatingService : Service() {
     private fun refreshActivity() {
         val active = panel == null && ((ytHas && ytPlaying) || speaker.speaking)
         eq?.setActive(active)
+        miniPlay?.iv?.set(if ((ytHas && ytPlaying) || speaker.speaking) Ic.PAUSE else Ic.PLAY)
     }
 
     // ---- Phát / Dừng / Tua: dùng chung cho thanh vuốt (khi thu lại) và thanh dọc (khi mở)
 
+    /** Đang mở tab TikTok trong khung: các nút Phát / Dừng / Tua / Tiếp điều khiển video TikTok. */
+    private fun tkActive(): Boolean = panel != null && !settingsOpen && tab == 3 && tk != null
+
     private fun mediaPlay() {
+        if (tkActive()) {
+            tk?.evaluateJavascript(TK_PLAY_JS, null)
+            return
+        }
         if (!ytHas) {
             Toast.makeText(this, "Chưa có video YouTube đang mở", Toast.LENGTH_SHORT).show()
             return
@@ -539,6 +596,7 @@ class FloatingService : Service() {
 
     /** Dừng video (không tự phát lại nữa) và dừng đọc. */
     private fun mediaStop() {
+        tk?.evaluateJavascript(TK_PAUSE_JS, null)
         yt?.evaluateJavascript(PAUSE_JS, null)
         ytPlaying = false
         ytWant = false
@@ -547,11 +605,32 @@ class FloatingService : Service() {
     }
 
     private fun mediaSeek(sec: Int) {
+        if (tkActive()) {
+            tk?.evaluateJavascript(
+                "(function(){" + TK_PICK + "if(v&&v.duration){" +
+                    "v.currentTime=Math.max(0,Math.min(v.duration,v.currentTime+($sec)))}})()", null
+            )
+            return
+        }
         if (!ytHas) return
         yt?.evaluateJavascript(
             "(function(){var v=document.querySelector('video');if(v&&v.duration){" +
                 "v.currentTime=Math.max(0,Math.min(v.duration,v.currentTime+($sec)))}})()", null
         )
+    }
+
+    /** Video tiếp theo (YouTube hoặc TikTok). Báo nếu trang không có nút phù hợp. */
+    private fun mediaNext() {
+        val w = if (tkActive()) tk else if (ytHas) yt else null
+        if (w == null) {
+            Toast.makeText(this, "Chưa có video đang mở", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val isTk = w === tk
+        if (!isTk) ytMoveAt = SystemClock.uptimeMillis()
+        w.evaluateJavascript(if (isTk) TK_NEXT_JS else YT_NEXT_JS) { r ->
+            if (r != "1") Toast.makeText(this, "Không tìm thấy nút video tiếp theo", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private class MenuItem(val ic: Ic, val label: String, val danger: Boolean, val act: () -> Unit)
@@ -587,10 +666,12 @@ class FloatingService : Service() {
             items.add(MenuItem(if (ytPlaying) Ic.PAUSE else Ic.PLAY,
                 if (ytPlaying) "Tạm dừng video" else "Phát video", false) { ytToggle() })
         }
+        if (ytHas) items.add(MenuItem(Ic.NEXT, "Video tiếp theo", false) { mediaNext() })
         if (speaker.speaking) items.add(MenuItem(Ic.STOP, "Dừng đọc", false) { speaker.stop() })
         items.add(MenuItem(Ic.WAVE, "Đọc tự động", false) { openPanel(0, false) })
         items.add(MenuItem(Ic.VIDEO, "YouTube", false) { openPanel(1, false) })
         items.add(MenuItem(Ic.SEARCH, "Google", false) { openPanel(2, false) })
+        items.add(MenuItem(Ic.NOTE, "TikTok", false) { openPanel(3, false) })
         items.add(MenuItem(Ic.SLIDERS, "Cài đặt", false) { openPanel(tab, true) })
         items.add(MenuItem(Ic.CLOSE, "Tắt app nổi", true) { stopSelf() })
 
@@ -689,6 +770,7 @@ class FloatingService : Service() {
         sugBox = null
         lineViews.clear()
         gg?.onPause()
+        pauseTk()
         refreshLaunchers()
         refreshActivity()
         Cloud.autoSave(this)
@@ -703,6 +785,7 @@ class FloatingService : Service() {
             }
             tab == 1 && yt?.canGoBack() == true -> yt?.goBack()
             tab == 2 && gg?.canGoBack() == true -> gg?.goBack()
+            tab == 3 && tk?.canGoBack() == true -> tk?.goBack()
             else -> hidePanel()
         }
     }
@@ -768,7 +851,8 @@ class FloatingService : Service() {
         curLook = look
         val land = isLand()
         val textSp = Prefs.int(this, "text_size", 18).toFloat()
-        val margin = Ui.dp(this, 10)       // khoảng cách nhỏ từ khung tới rìa màn hình
+        // khoảng cách từ khung tới rìa màn hình: chỉnh riêng cho màn dọc / màn ngang trong Cài đặt
+        val margin = Ui.dp(this, Prefs.int(this, if (land) "margin_l" else "margin_p", 10).coerceIn(0, 32))
         val pad = Ui.dp(this, 14)
         val side = handleSide()
 
@@ -841,10 +925,10 @@ class FloatingService : Service() {
                 head.addView(Ui.tv(this, look, "Cài đặt", 19f, true),
                     lp(0, -2, 1f).apply { marginStart = Ui.dp(this@FloatingService, 12) })
             } else if (land) {
-                head.addView(Ui.tv(this, look, when (tab) { 0 -> "Đọc tự động"; 1 -> "YouTube"; else -> "Google" }, 19f, true),
+                head.addView(Ui.tv(this, look, when (tab) { 0 -> "Đọc tự động"; 1 -> "YouTube"; 2 -> "Google"; else -> "TikTok" }, 19f, true),
                     lp(0, -2, 1f).apply { marginStart = Ui.dp(this@FloatingService, 4) })
             } else {
-                head.addView(Ui.segment(this, look, listOf(Ic.WAVE to "Đọc", Ic.VIDEO to "YouTube", Ic.SEARCH to "Google"), tab) {
+                head.addView(Ui.segment(this, look, listOf(Ic.WAVE to "Đọc", Ic.VIDEO to "YouTube", Ic.SEARCH to "Google", Ic.NOTE to "TikTok"), tab) {
                     tab = it
                     Prefs.putI(this, "last_tab", it)
                     buildPanel()
@@ -863,6 +947,7 @@ class FloatingService : Service() {
             col.addView(Ui.gap(this, 12))
 
             ytHolder = null
+            if (settingsOpen || tab != 3) pauseTk()   // rời tab TikTok thì dừng video TikTok
             if (settingsOpen) {
                 hostYt()
                 val sv = ScrollView(this)
@@ -879,6 +964,9 @@ class FloatingService : Service() {
             } else if (tab == 2) {
                 hostYt()
                 buildGoogle(col, look)
+            } else if (tab == 3) {
+                hostYt()
+                buildTikTok(col, look)
             } else {
                 buildYoutube(col, look)
             }
@@ -976,7 +1064,9 @@ class FloatingService : Service() {
             lp(-1, -2).apply { bottomMargin = gap })
         inner.addView(dockTab(look, Ic.VIDEO, "YouTube", idle && tab == 1) { goTab(1) },
             lp(-1, -2).apply { bottomMargin = gap })
-        inner.addView(dockTab(look, Ic.SEARCH, "Google", idle && tab == 2) { goTab(2) }, lp(-1, -2))
+        inner.addView(dockTab(look, Ic.SEARCH, "Google", idle && tab == 2) { goTab(2) },
+            lp(-1, -2).apply { bottomMargin = gap })
+        inner.addView(dockTab(look, Ic.NOTE, "TikTok", idle && tab == 3) { goTab(3) }, lp(-1, -2))
 
         val div = View(this)
         div.setBackgroundColor(look.hair)
@@ -991,7 +1081,9 @@ class FloatingService : Service() {
             lp(-1, -2).apply { bottomMargin = gap })
         inner.addView(dockAct(look, Ic.STOP, "Dừng", { mediaStop() }),
             lp(-1, -2).apply { bottomMargin = gap })
-        inner.addView(dockAct(look, Ic.SEEK, "Tua", { mediaSeek(10) }, { mediaSeek(-10) }), lp(-1, -2))
+        inner.addView(dockAct(look, Ic.SEEK, "Tua", { mediaSeek(10) }, { mediaSeek(-10) }),
+            lp(-1, -2).apply { bottomMargin = gap })
+        inner.addView(dockAct(look, Ic.NEXT, "Tiếp", { mediaNext() }), lp(-1, -2))
         return dock
     }
 
@@ -1134,6 +1226,261 @@ class FloatingService : Service() {
         else "https://www.google.com/search?hl=vi&q=" + URLEncoder.encode(s, "UTF-8")
         ggQuery = s
         w.loadUrl(url)
+    }
+
+    // ---------------------------------------------------------------- Tab TikTok (mở trong khung, giống YouTube / Google)
+
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
+    private fun ensureTk(look: Look): WebView {
+        tk?.let { return it }
+        val w = WebView(this)
+        w.setBackgroundColor(look.base)
+        val s = w.settings
+        s.javaScriptEnabled = true
+        s.domStorageEnabled = true
+        s.mediaPlaybackRequiresUserGesture = false
+        s.loadWithOverviewMode = true
+        s.useWideViewPort = true
+        s.userAgentString = s.userAgentString.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+ "), "")
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(true)
+        cm.setAcceptThirdPartyCookies(w, true)
+        w.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val u = request?.url?.toString() ?: return true
+                return !(u.startsWith("http://") || u.startsWith("https://"))
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                tkBack?.alpha = if (view?.canGoBack() == true) 1f else 0.35f
+            }
+        }
+        w.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, p: Int) {
+                tkProgress?.let {
+                    it.set(p / 100f)
+                    it.visibility = if (p >= 100) View.GONE else View.VISIBLE
+                }
+            }
+        }
+        w.setOnTouchListener { _, e ->
+            if (e.action == MotionEvent.ACTION_DOWN) tkEt?.let { hideKeyboard(it) }
+            false
+        }
+        w.loadUrl(TK_HOME)
+        tk = w
+        return w
+    }
+
+    private fun buildTikTok(col: LinearLayout, look: Look) {
+        val w = ensureTk(look)
+        detach(w)
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val back = Ui.iconBtn(this, look, Ic.BACK, 42) { if (tk?.canGoBack() == true) tk?.goBack() }
+        back.alpha = if (w.canGoBack()) 1f else 0.35f
+        tkBack = back
+        row.addView(back)
+
+        val field = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(Ui.dp(this@FloatingService, 14), 0, Ui.dp(this@FloatingService, 6), 0)
+            background = Ui.rr(look.tonal, 21)
+        }
+        field.addView(Ui.icon(this, Ic.SEARCH, look.muted, 18))
+        val et = EditText(this).apply {
+            hint = "Tìm kiếm trên TikTok"
+            setText(tkQuery)
+            setTextColor(look.text)
+            setHintTextColor(look.muted)
+            textSize = 15f
+            setSingleLine(true)
+            background = null
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            setPadding(Ui.dp(this@FloatingService, 10), 0, Ui.dp(this@FloatingService, 6), 0)
+        }
+        tkEt = et
+        field.addView(et, lp(0, Ui.dp(this, 42), 1f))
+        val clear = Ui.icon(this, Ic.CLOSE, look.muted, 18)
+        clear.setPadding(Ui.dp(this, 3), Ui.dp(this, 3), Ui.dp(this, 3), Ui.dp(this, 3))
+        clear.visibility = if (tkQuery.isEmpty()) View.GONE else View.VISIBLE
+        clear.setOnClickListener {
+            et.setText("")
+            et.requestFocus()
+        }
+        field.addView(clear)
+        et.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                tkQuery = s?.toString() ?: ""
+                clear.visibility = if (tkQuery.isEmpty()) View.GONE else View.VISIBLE
+            }
+        })
+        et.setOnEditorActionListener { v, id, ev ->
+            if (id == EditorInfo.IME_ACTION_SEARCH ||
+                (ev != null && ev.keyCode == KeyEvent.KEYCODE_ENTER && ev.action == KeyEvent.ACTION_DOWN)
+            ) {
+                hideKeyboard(v)
+                tkSearch(v.text.toString())
+                true
+            } else false
+        }
+        row.addView(field, lp(0, Ui.dp(this, 42), 1f).apply {
+            marginStart = Ui.dp(this@FloatingService, 8)
+            marginEnd = Ui.dp(this@FloatingService, 8)
+        })
+        row.addView(Ui.iconBtn(this, look, Ic.HOME, 42) {
+            tkQuery = ""
+            et.setText("")
+            hideKeyboard(et)
+            tk?.loadUrl(TK_HOME)
+        })
+        col.addView(row)
+        col.addView(Ui.gap(this, 10))
+
+        val holder = FrameLayout(this)
+        holder.clipToOutline = true
+        holder.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(v: View, o: Outline) {
+                o.setRoundRect(0, 0, v.width, v.height, Ui.dp(this@FloatingService, 18).toFloat())
+            }
+        }
+        holder.addView(w, FrameLayout.LayoutParams(-1, -1))
+        val pg = ProgressLine(this, 0, look.accent)
+        pg.visibility = View.GONE
+        tkProgress = pg
+        holder.addView(pg, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        col.addView(holder, lp(-1, 0, 1f))
+        w.onResume()
+    }
+
+    private fun tkSearch(q: String) {
+        val s = q.trim()
+        if (s.isEmpty()) return
+        val w = tk ?: return
+        val url = if (s.startsWith("http://") || s.startsWith("https://")) s
+        else "https://www.tiktok.com/search?q=" + URLEncoder.encode(s, "UTF-8")
+        tkQuery = s
+        w.loadUrl(url)
+    }
+
+    /** Dừng video TikTok khi rời tab / thu khung (TikTok chỉ phát khi đang mở khung). */
+    private fun pauseTk() {
+        tk?.let {
+            it.evaluateJavascript(TK_PAUSE_JS, null)
+            it.onPause()
+        }
+    }
+
+    // ---------------------------------------------------------------- Thanh mini (màn dọc)
+
+    /** Thanh điều khiển nhỏ nằm ngang: mở khung, phát / dừng, tua, tiếp, tắt. Kéo bằng tay nắm bên trái. */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showMiniBar() {
+        val look = Look(this, "f")
+        val pad = Ui.dp(this, 6)
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.HORIZONTAL
+        root.gravity = Gravity.CENTER_VERTICAL
+        root.setPadding(pad, pad, pad, pad)
+        root.background = Ui.glass(this, look, 26)
+        root.elevation = Ui.dp(this, 6).toFloat()
+
+        val grip = FrameLayout(this)
+        val gv = View(this)
+        gv.background = Ui.rr(look.muted, 2)
+        grip.addView(gv, FrameLayout.LayoutParams(Ui.dp(this, 4), Ui.dp(this, 24), Gravity.CENTER))
+        root.addView(grip, lp(Ui.dp(this, 22), Ui.dp(this, 38)))
+
+        val size = 38
+        val gap = Ui.dp(this, 4)
+        fun add(btn: IconBtn) {
+            root.addView(btn, lp(Ui.dp(this, size), Ui.dp(this, size)).apply { marginStart = gap })
+        }
+        add(Ui.iconBtn(this, look, Ic.EXPAND, size) { openPanel(tab, false) })
+        val playBtn = Ui.iconBtn(this, look, Ic.PLAY, size, true) {
+            if (ytHas) ytToggle() else if (speaker.speaking) speaker.stop() else mediaPlay()
+        }
+        miniPlay = playBtn
+        add(playBtn)
+        add(Ui.iconBtn(this, look, Ic.SEEK, size) { mediaSeek(10) })
+        add(Ui.iconBtn(this, look, Ic.NEXT, size) { mediaNext() })
+        add(Ui.iconBtn(this, look, Ic.CLOSE, size) { stopSelf() })
+
+        val wlp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or hardware(),
+            PixelFormat.TRANSLUCENT
+        )
+        wlp.gravity = Gravity.TOP or Gravity.START
+        wlp.x = Prefs.int(this, "mini_x", Ui.dp(this, 8))
+        wlp.y = Prefs.int(this, "mini_y", Ui.dp(this, 220))
+
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        grip.setOnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    startX = wlp.x
+                    startY = wlp.y
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val (sw, sh) = screen()
+                    wlp.x = (startX + (ev.rawX - downX).toInt()).coerceIn(0, maxOf(0, sw - root.width))
+                    wlp.y = (startY + (ev.rawY - downY).toInt()).coerceIn(0, maxOf(0, sh - root.height))
+                    try { wm.updateViewLayout(root, wlp) } catch (_: Exception) {}
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    Prefs.putI(this, "mini_x", wlp.x)
+                    Prefs.putI(this, "mini_y", wlp.y)
+                    true
+                }
+                else -> false
+            }
+        }
+
+        root.visibility = View.GONE
+        root.alpha = Prefs.int(this, "bubble_alpha", 90) / 100f
+        mini = root
+        miniLp = wlp
+        wm.addView(root, wlp)
+        refreshActivity()
+    }
+
+    private fun applyMini() {
+        mini?.alpha = Prefs.int(this, "bubble_alpha", 90) / 100f
+    }
+
+    private fun clampMini() {
+        val v = mini ?: return
+        val wlp = miniLp ?: return
+        val (sw, sh) = screen()
+        wlp.x = wlp.x.coerceIn(0, maxOf(0, sw - v.width))
+        wlp.y = wlp.y.coerceIn(0, maxOf(0, sh - v.height))
+        try { wm.updateViewLayout(v, wlp) } catch (_: Exception) {}
+    }
+
+    /** Màu giao diện đổi thì dựng lại thanh mini cho khớp. */
+    private fun rebuildMini() {
+        mini?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        mini = null
+        miniLp = null
+        miniPlay = null
+        showMiniBar()
+        refreshLaunchers()
     }
 
     // ---------------------------------------------------------------- Tab đọc tự động
@@ -1400,8 +1747,10 @@ class FloatingService : Service() {
         if (ytHas && ytPlaying) ytWant = true
         ytMoveAt = SystemClock.uptimeMillis()
         w.evaluateJavascript(KEEP_JS, null)
+        w.evaluateJavascript(MOVE_JS, null)
         if (!ytWant) return
-        for (d in longArrayOf(120, 450, 1000, 2000)) {
+        // Phát lại có giới hạn (3 lần trong ~2 giây) chỉ ngay sau khi đổi cửa sổ; sau đó không tự phát nữa.
+        for (d in longArrayOf(150, 700, 1800)) {
             ui.postDelayed({
                 if (ytWant) yt?.evaluateJavascript(PLAY_JS, null)
             }, d)
@@ -1667,14 +2016,15 @@ class FloatingService : Service() {
                     if (o.optBoolean("p")) {
                         ytPlaying = true
                         ytWant = true
-                    } else if (ytWant && o.optInt("e", 0) == 0 &&
-                        (o.optInt("w", 0) == 1 || SystemClock.uptimeMillis() - ytMoveAt < 3000)) {
-                        // bị tạm dừng không do người dùng (đổi cửa sổ, app khác chiếm âm thanh...): phát lại ngay
+                    } else if (ytWant && o.optInt("e", 0) == 0 && SystemClock.uptimeMillis() - ytMoveAt < 2500) {
+                        // vừa đổi cửa sổ / vừa bấm phát: chờ bước phát lại có giới hạn ở onYtMoved, KHÔNG phát thêm ở đây
                         ytPlaying = true
-                        yt?.evaluateJavascript(PLAY_JS, null)
                     } else {
+                        // bị dừng bởi app khác / hệ thống (chiếm âm thanh) hoặc do người dùng: tôn trọng, không phát lại
+                        // (phát lại sẽ giành âm thanh với app kia và gây bật/tắt liên tục)
                         ytPlaying = false
                         ytWant = false
+                        if (o.optInt("w", 0) == 1) yt?.evaluateJavascript(WANT_OFF_JS, null)
                     }
                     ytTime = o.optDouble("t", 0.0).let { if (it.isNaN() || it.isInfinite()) 0.0 else it }
                     ytDur = o.optDouble("d", 0.0).let { if (it.isNaN() || it.isInfinite()) 0.0 else it }

@@ -39,3 +39,14 @@ Mỗi khối chữ là 1 dòng; chưa tự đọc để bạn sửa lỗi nhận
 - Tab **Google** mở trang google.com ngay trong khung, giống tab YouTube (dọc cũng có).
 - YouTube đã bấm phát thì giữ phát khi thu nhỏ / phóng to / xoay; chỉ dừng khi bấm Dừng (hoặc tự chạm tạm dừng trong video).
 - Nếu video bị dừng không do người dùng (vào app khác, app khác chiếm âm thanh...), app tự phát lại ngay thay vì dừng hẳn.
+
+## 5. Hợp nhất GlassPIP (v4)
+Đã ghép các tính năng riêng của GlassPIP vào Học Nổi (phần GlassPIP đã có sẵn trong Học Nổi như hình nổi, độ kính, độ mờ, nửa màn hình khi ngang, cạnh trái/phải thì giữ nguyên bản Học Nổi):
+- Tab **TikTok** (m. giống YouTube/Google): có ô tìm kiếm, nút Home, quay lại. Chỉ phát khi đang mở khung; rời tab hoặc thu khung thì dừng.
+- Nút **Tiếp** (video tiếp theo) trên thanh dọc (ngang), menu hình nổi và thanh mini. Phát / Dừng / Tua tự áp dụng cho video của tab đang mở (YouTube hoặc TikTok).
+- Kiểu thu nhỏ ở màn dọc: **Hình nổi** (mặc định) hoặc **Thanh mini** (mở khung, phát/dừng, tua, tiếp, tắt; kéo bằng tay nắm bên trái). Chọn trong Cài đặt > Kiểu thu nhỏ.
+- **Khoảng cách từ khung tới rìa** chỉnh riêng cho màn dọc và màn ngang (mặc định 10dp như cũ).
+
+## 6. Sửa lỗi YouTube bật/tắt liên tục khi đang ở app khác
+Nguyên nhân: app tự phát lại video ở 3 chỗ (sự kiện dừng của trang sau 150ms tới 8 lần/10 giây, vòng kiểm tra mỗi giây, và lệnh phát sau khi đổi cửa sổ). Khi app khác chiếm âm thanh, video bị dừng, app lại phát ngay và giành âm thanh về, app kia lại cướp lại... gây giật lag và bật/tắt hoài.
+Cách sửa: chỉ phát lại tối đa 3 lần trong 2,5 giây ngay sau khi đổi cửa sổ (thu nhỏ / phóng to / xoay). Video bị dừng ở thời điểm khác (app khác chiếm âm thanh, người dùng tự dừng) thì được tôn trọng, không phát lại. Cần phát tiếp thì bấm Phát.

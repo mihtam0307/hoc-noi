@@ -55,6 +55,20 @@ object SettingsUi {
                 Ui.btn(c, look, "Đổi hình", false, Ic.IMAGE) { pick("bubble_img") },
                 Ui.btn(c, look, "Mặc định", false, Ic.BACK) { clear(c, "bubble_img"); onChanged() }), 18)
 
+            title("KIỂU THU NHỎ (MÀN DỌC)")
+            add(Ui.chips(c, look, listOf("Hình nổi", "Thanh mini"), Prefs.int(c, "mini_mode", 0).coerceIn(0, 1)) {
+                Prefs.putI(c, "mini_mode", it); onChanged()
+            }, 18)
+
+            title("KHOẢNG CÁCH TỪ KHUNG TỚI RÌA MÀN HÌNH")
+            // Không dùng "live": mỗi lần đổi, khung được dựng lại nên chỉ lưu khi thả tay (giống Cỡ chữ)
+            add(Ui.slider(c, look, "Màn dọc", 0, 32, Prefs.int(c, "margin_p", 10), { "${it}dp" }) {
+                Prefs.putI(c, "margin_p", it); onChanged()
+            })
+            add(Ui.slider(c, look, "Màn ngang", 0, 32, Prefs.int(c, "margin_l", 10), { "${it}dp" }) {
+                Prefs.putI(c, "margin_l", it); onChanged()
+            }, 18)
+
             title("THANH VUỐT (MÀN HÌNH NGANG)")
             add(Ui.chips(c, look, listOf("Cạnh trái", "Cạnh phải"), Prefs.int(c, "handle_side", 0).coerceIn(0, 1)) {
                 Prefs.putI(c, "handle_side", it); onChanged()
